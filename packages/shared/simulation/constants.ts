@@ -2,7 +2,7 @@ export const MAP_HALF_SIZE = 242;
 export const INITIAL_HOLE_RADIUS = 1.15;
 export const GAME_DURATION_SECONDS = 180;
 export const BOT_COUNT = 2;
-export const SCENE_OBJECT_COUNT = 13_805;
+export const SCENE_OBJECT_COUNT = 14_158;
 export const SPATIAL_HASH_CELL_SIZE = 8;
 export const BASE_MOVE_SPEED = 8.2;
 export const MOVE_SPEED_PER_LEVEL = 0.45;
@@ -10,6 +10,14 @@ export const BOT_SPEED_MULTIPLIER = 0.56;
 export const BOT_DETECTION_RADIUS = 88;
 export const VEHICLE_SPEED = 4.5;
 export const PEDESTRIAN_SPEED = 1.15;
+
+export const SPEED_BOOST_DURATION_SECONDS = 5;
+export const SPEED_BOOST_COOLDOWN_SECONDS = 20;
+export const RADIUS_BOOST_DURATION_SECONDS = 5;
+export const RADIUS_BOOST_COOLDOWN_SECONDS = 60;
+export const BOMB_FUSE_SECONDS = 3;
+export const BOMB_COOLDOWN_SECONDS = 120;
+export const BOMB_RADIUS_MULTIPLIER = 2;
 
 export const HOLE_FIT_RATIO = 0.98;
 export const GRAVITY_METERS_PER_SECOND_SQUARED = 16.2;

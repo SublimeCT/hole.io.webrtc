@@ -1,9 +1,11 @@
 import { buildApp } from "./app.js";
 import { loadConfig } from "./config.js";
+import { loadAbuseConfig } from "./config/abuse.js";
 
 async function start(): Promise<void> {
   const config = loadConfig();
-  const app = await buildApp({ config });
+  const abuse = loadAbuseConfig();
+  const app = await buildApp({ config, abuse });
 
   const shutdown = async (signal: string): Promise<void> => {
     app.log.info({ signal }, "shutting down");

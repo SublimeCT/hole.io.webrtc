@@ -43,6 +43,9 @@ export interface CityVisibilityContext {
   cameraPosition: THREE.Vector3;
 }
 
+const SMALL_OBJECT_RENDER_DISTANCE = 150;
+const SMALL_OBJECT_SCORE_THRESHOLD = 10;
+
 const HIDDEN_MATRIX = new THREE.Matrix4().makeScale(0, 0, 0);
 
 export class CityObjectRenderer {
@@ -53,6 +56,7 @@ export class CityObjectRenderer {
   readonly #activeModels = new Map<string, THREE.Group>();
   readonly #transparentModels = new Map<string, THREE.Group>();
   readonly #transparentObjectIds = new Set<string>();
+  readonly #hiddenSmallObjectIds = new Set<string>();
   readonly #animatedModels = new Map<string, AnimatedModel>();
   readonly #lastStatus = new Map<string, WorldObjectState["status"]>();
   readonly #position = new THREE.Vector3();
@@ -165,6 +169,34 @@ export class CityObjectRenderer {
         this.#lastStatus.set(object.id, object.status);
         continue;
       }
+      const shouldHideSmallObject =
+        object.status === "static" &&
+        object.motion === null &&
+        visibilityContext !== null &&
+        object.value < SMALL_OBJECT_SCORE_THRESHOLD &&
+        Math.hypot(
+          object.position.x - visibilityContext.player.position.x,
+          object.position.y - visibilityContext.player.position.y,
+        ) > SMALL_OBJECT_RENDER_DISTANCE;
+      const wasHiddenSmallObject = this.#hiddenSmallObjectIds.has(object.id);
+      if (shouldHideSmallObject) {
+        if (!wasHiddenSmallObject) {
+          instance.batch.meshes.forEach((mesh) => {
+            instance.indices.forEach((index) => mesh.setMatrixAt(index, HIDDEN_MATRIX));
+            touchedMeshes.add(mesh);
+          });
+          this.#hiddenSmallObjectIds.add(object.id);
+        }
+        const transparentModel = this.#transparentModels.get(object.id);
+        if (transparentModel) transparentModel.visible = false;
+        const activeModel = this.#activeModels.get(object.id);
+        if (activeModel) activeModel.visible = false;
+        this.#lastStatus.set(object.id, object.status);
+        continue;
+      }
+      if (wasHiddenSmallObject) {
+        this.#hiddenSmallObjectIds.delete(object.id);
+      }
       const shouldFade =
         object.status === "static" &&
         visibilityContext !== null &&
@@ -200,7 +232,12 @@ export class CityObjectRenderer {
         }
       }
       if (object.status === "static") {
-        if (previousStatus !== "static" || object.motion || wasTransparent) {
+        if (
+          previousStatus !== "static" ||
+          object.motion ||
+          wasTransparent ||
+          wasHiddenSmallObject
+        ) {
           this.#setInstanceTransforms(instance.batch, instance.indices, object);
           instance.batch.meshes.forEach((mesh) => touchedMeshes.add(mesh));
         }

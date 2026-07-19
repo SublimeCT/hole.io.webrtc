@@ -1,6 +1,6 @@
 import "./style.css";
 
-import { Game, type GamePreferences, type GameUi } from "./game/Game";
+import { Game, type AbilityButtonUi, type GamePreferences, type GameUi } from "./game/Game";
 
 const PREFERENCES_KEY = "hole-city-player-preferences";
 const DEFAULT_PREFERENCES: GamePreferences = {
@@ -89,6 +89,24 @@ const ui: GameUi = {
       distance: requireElement("#bot-two-distance"),
     },
   ],
+  abilityButtons: [
+    {
+      root: requireElement<HTMLButtonElement>("#ability-speed"),
+      cooldown: requireElement("#ability-speed-cooldown"),
+      status: requireElement("#ability-speed-status"),
+    },
+    {
+      root: requireElement<HTMLButtonElement>("#ability-radius"),
+      cooldown: requireElement("#ability-radius-cooldown"),
+      status: requireElement("#ability-radius-status"),
+    },
+    {
+      root: requireElement<HTMLButtonElement>("#ability-bomb"),
+      cooldown: requireElement("#ability-bomb-cooldown"),
+      status: requireElement("#ability-bomb-status"),
+    },
+  ] as readonly [AbilityButtonUi, AbilityButtonUi, AbilityButtonUi],
+  abilityFeedback: requireElement("#ability-feedback"),
 };
 
 const settingsDialog = requireElement<HTMLElement>("#settings-dialog");

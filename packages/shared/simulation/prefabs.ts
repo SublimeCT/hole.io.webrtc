@@ -14,6 +14,9 @@ const COMMERCIAL_ROOT = "/kits/kenney-city-kit-commercial/models";
 const CAR_ROOT = "/kits/kenney-car-kit/models";
 const CHARACTER_ROOT = "/kits/kenney-blocky-characters/models";
 
+// GLB bounds scan: 5.469999 units, higher than every other building mesh in the kit.
+export const HIGHEST_BUILDING_PREFAB_ID = "commercial-skyscraper-d";
+
 const BUILDING_IDS = [
   "a",
   "b",
@@ -111,10 +114,335 @@ const CHARACTER_DEFINITIONS: readonly PrefabDefinition[] = CHARACTER_LABELS.map(
   };
 });
 
+function extraPrefab(
+  id: string,
+  label: string,
+  assetPath: string,
+  size: Vector2,
+  height: number,
+  shape: WorldObjectShape = "box",
+): PrefabDefinition {
+  return { id, label, assetPath, shape, size, height };
+}
+
+const EXTRA_COMMERCIAL_DEFINITIONS: readonly PrefabDefinition[] = [
+  ...["i", "j", "k", "l", "m", "n"].map((suffix, index) =>
+    extraPrefab(
+      `commercial-building-${suffix}`,
+      `Commercial building ${suffix.toUpperCase()}`,
+      `${COMMERCIAL_ROOT}/building-${suffix}.glb`,
+      { x: 8.4 + (index % 3) * 0.45, y: 8.5 + (index % 2) * 0.5 },
+      11 + (index % 4) * 2,
+    ),
+  ),
+  extraPrefab(
+    "commercial-skyscraper-e",
+    "Commercial skyscraper E",
+    `${COMMERCIAL_ROOT}/building-skyscraper-e.glb`,
+    { x: 8.9, y: 8.8 },
+    30,
+  ),
+  ...["i", "j", "k", "l", "m", "n"].map((suffix, index) =>
+    extraPrefab(
+      `commercial-low-${suffix}`,
+      `Low commercial building ${suffix.toUpperCase()}`,
+      `${COMMERCIAL_ROOT}/low-detail-building-${suffix}.glb`,
+      { x: 4.8 + (index % 2) * 0.25, y: 4.8 + ((index + 1) % 2) * 0.25 },
+      6.8 + (index % 3),
+    ),
+  ),
+  extraPrefab(
+    "commercial-low-wide-a",
+    "Wide low commercial building A",
+    `${COMMERCIAL_ROOT}/low-detail-building-wide-a.glb`,
+    { x: 4.8, y: 4.4 },
+    6.2,
+  ),
+  extraPrefab(
+    "commercial-low-wide-b",
+    "Wide low commercial building B",
+    `${COMMERCIAL_ROOT}/low-detail-building-wide-b.glb`,
+    { x: 4.9, y: 4.5 },
+    6.6,
+  ),
+  extraPrefab(
+    "awning",
+    "Shop awning",
+    `${COMMERCIAL_ROOT}/detail-awning.glb`,
+    { x: 2.4, y: 0.9 },
+    0.8,
+  ),
+  extraPrefab(
+    "awning-wide",
+    "Wide shop awning",
+    `${COMMERCIAL_ROOT}/detail-awning-wide.glb`,
+    { x: 4.5, y: 0.9 },
+    0.8,
+  ),
+  extraPrefab(
+    "overhang",
+    "Shop overhang",
+    `${COMMERCIAL_ROOT}/detail-overhang.glb`,
+    { x: 2.1, y: 0.8 },
+    0.8,
+  ),
+  extraPrefab(
+    "overhang-wide",
+    "Wide shop overhang",
+    `${COMMERCIAL_ROOT}/detail-overhang-wide.glb`,
+    { x: 3.9, y: 0.8 },
+    0.8,
+  ),
+  extraPrefab(
+    "parasol-a",
+    "Street parasol A",
+    `${COMMERCIAL_ROOT}/detail-parasol-a.glb`,
+    { x: 1.4, y: 1.4 },
+    2.7,
+  ),
+  extraPrefab(
+    "parasol-b",
+    "Street parasol B",
+    `${COMMERCIAL_ROOT}/detail-parasol-b.glb`,
+    { x: 1.4, y: 1.4 },
+    2.7,
+  ),
+];
+
+const EXTRA_VEHICLE_DEFINITIONS: readonly PrefabDefinition[] = [
+  extraPrefab(
+    "vehicle-delivery-flat",
+    "Flatbed delivery vehicle",
+    `${CAR_ROOT}/delivery-flat.glb`,
+    { x: 2.2, y: 5.2 },
+    2.3,
+  ),
+  extraPrefab(
+    "vehicle-kart-oobi",
+    "Kart Oobi",
+    `${CAR_ROOT}/kart-oobi.glb`,
+    { x: 1.4, y: 2.2 },
+    1.6,
+  ),
+  extraPrefab(
+    "vehicle-kart-oodi",
+    "Kart Oodi",
+    `${CAR_ROOT}/kart-oodi.glb`,
+    { x: 1.4, y: 2.2 },
+    1.6,
+  ),
+  extraPrefab(
+    "vehicle-kart-ooli",
+    "Kart Ooli",
+    `${CAR_ROOT}/kart-ooli.glb`,
+    { x: 1.4, y: 2.2 },
+    1.6,
+  ),
+  extraPrefab(
+    "vehicle-kart-oopi",
+    "Kart Oopi",
+    `${CAR_ROOT}/kart-oopi.glb`,
+    { x: 1.4, y: 2.2 },
+    1.6,
+  ),
+  extraPrefab(
+    "vehicle-kart-oozi",
+    "Kart Oozi",
+    `${CAR_ROOT}/kart-oozi.glb`,
+    { x: 1.4, y: 2.2 },
+    1.6,
+  ),
+  extraPrefab("vehicle-race", "Race car", `${CAR_ROOT}/race.glb`, { x: 1.8, y: 4.1 }, 1.4),
+  extraPrefab(
+    "vehicle-race-future",
+    "Future race car",
+    `${CAR_ROOT}/race-future.glb`,
+    { x: 1.8, y: 4.1 },
+    1.4,
+  ),
+  extraPrefab(
+    "vehicle-sedan-sports",
+    "Sports sedan",
+    `${CAR_ROOT}/sedan-sports.glb`,
+    { x: 2, y: 4.2 },
+    1.55,
+  ),
+  extraPrefab(
+    "vehicle-suv-luxury",
+    "Luxury SUV",
+    `${CAR_ROOT}/suv-luxury.glb`,
+    { x: 2.15, y: 4.5 },
+    1.7,
+  ),
+  extraPrefab("vehicle-tractor", "Tractor", `${CAR_ROOT}/tractor.glb`, { x: 2.3, y: 3.9 }, 2.5),
+  extraPrefab(
+    "vehicle-tractor-police",
+    "Police tractor",
+    `${CAR_ROOT}/tractor-police.glb`,
+    { x: 2.4, y: 4 },
+    2.6,
+  ),
+  extraPrefab(
+    "vehicle-tractor-shovel",
+    "Shovel tractor",
+    `${CAR_ROOT}/tractor-shovel.glb`,
+    { x: 2.6, y: 4 },
+    2.8,
+  ),
+  extraPrefab(
+    "vehicle-truck-flat",
+    "Flatbed truck",
+    `${CAR_ROOT}/truck-flat.glb`,
+    { x: 2.3, y: 5.3 },
+    2.5,
+  ),
+];
+
+const EXTRA_CAR_PART_DEFINITIONS: readonly PrefabDefinition[] = [
+  extraPrefab("debris-bolt", "Car bolt", `${CAR_ROOT}/debris-bolt.glb`, { x: 0.22, y: 0.22 }, 0.24),
+  extraPrefab(
+    "debris-door-window",
+    "Car door window",
+    `${CAR_ROOT}/debris-door-window.glb`,
+    { x: 0.35, y: 1.1 },
+    0.85,
+  ),
+  extraPrefab("debris-door", "Car door", `${CAR_ROOT}/debris-door.glb`, { x: 0.35, y: 1.1 }, 0.9),
+  extraPrefab(
+    "debris-drivetrain-axle",
+    "Car axle",
+    `${CAR_ROOT}/debris-drivetrain-axle.glb`,
+    { x: 1.5, y: 0.4 },
+    0.4,
+  ),
+  extraPrefab(
+    "debris-drivetrain",
+    "Car drivetrain",
+    `${CAR_ROOT}/debris-drivetrain.glb`,
+    { x: 1.5, y: 2.2 },
+    0.5,
+  ),
+  extraPrefab("debris-nut", "Car nut", `${CAR_ROOT}/debris-nut.glb`, { x: 0.2, y: 0.2 }, 0.14),
+  extraPrefab(
+    "debris-plate-b",
+    "Metal debris plate B",
+    `${CAR_ROOT}/debris-plate-b.glb`,
+    { x: 0.9, y: 0.9 },
+    0.16,
+  ),
+  extraPrefab(
+    "debris-plate-small-b",
+    "Small metal debris plate B",
+    `${CAR_ROOT}/debris-plate-small-b.glb`,
+    { x: 0.45, y: 0.45 },
+    0.16,
+  ),
+  extraPrefab(
+    "debris-spoiler-a",
+    "Car spoiler A",
+    `${CAR_ROOT}/debris-spoiler-a.glb`,
+    { x: 1.4, y: 0.35 },
+    0.38,
+  ),
+  extraPrefab(
+    "debris-spoiler-b",
+    "Car spoiler B",
+    `${CAR_ROOT}/debris-spoiler-b.glb`,
+    { x: 1.25, y: 0.35 },
+    0.44,
+  ),
+  ...[
+    "wheel-dark",
+    "wheel-default",
+    "wheel-racing",
+    "wheel-tractor-back",
+    "wheel-tractor-dark-back",
+    "wheel-tractor-dark-front",
+    "wheel-tractor-front",
+    "wheel-truck",
+  ].map((name) =>
+    extraPrefab(
+      name,
+      name.replaceAll("-", " "),
+      `${CAR_ROOT}/${name}.glb`,
+      { x: 0.72, y: 0.72 },
+      0.42,
+      "cylinder",
+    ),
+  ),
+];
+
+const EXTRA_SUBURBAN_DEFINITIONS: readonly PrefabDefinition[] = [
+  extraPrefab(
+    "driveway-long",
+    "Long driveway",
+    `${SUBURBAN_ROOT}/driveway-long.glb`,
+    { x: 3.5, y: 6.8 },
+    0.04,
+  ),
+  extraPrefab(
+    "driveway-short",
+    "Short driveway",
+    `${SUBURBAN_ROOT}/driveway-short.glb`,
+    { x: 3.5, y: 3.4 },
+    0.04,
+  ),
+  ...[
+    "fence-1x2",
+    "fence-1x3",
+    "fence-1x4",
+    "fence-2x2",
+    "fence-2x3",
+    "fence-3x2",
+    "fence-3x3",
+  ].map((name, index) =>
+    extraPrefab(
+      name,
+      name.replaceAll("-", " "),
+      `${SUBURBAN_ROOT}/${name}.glb`,
+      { x: 1.8 + (index % 3) * 0.7, y: 0.55 + Math.floor(index / 3) * 0.65 },
+      1.5,
+    ),
+  ),
+  extraPrefab("path-long", "Long path", `${SUBURBAN_ROOT}/path-long.glb`, { x: 2.4, y: 6.8 }, 0.04),
+  extraPrefab(
+    "path-short",
+    "Short path",
+    `${SUBURBAN_ROOT}/path-short.glb`,
+    { x: 2.4, y: 3.4 },
+    0.04,
+  ),
+  extraPrefab(
+    "path-stones-long",
+    "Long stone path",
+    `${SUBURBAN_ROOT}/path-stones-long.glb`,
+    { x: 2.4, y: 6.8 },
+    0.04,
+  ),
+  extraPrefab(
+    "path-stones-messy",
+    "Messy stone path",
+    `${SUBURBAN_ROOT}/path-stones-messy.glb`,
+    { x: 2.8, y: 5.8 },
+    0.04,
+  ),
+  extraPrefab(
+    "path-stones-short",
+    "Short stone path",
+    `${SUBURBAN_ROOT}/path-stones-short.glb`,
+    { x: 2.4, y: 3.4 },
+    0.04,
+  ),
+];
+
 export const PREFAB_DEFINITIONS: readonly PrefabDefinition[] = [
   ...BUILDING_DEFINITIONS,
   ...COMMERCIAL_BUILDING_DEFINITIONS,
   ...CHARACTER_DEFINITIONS,
+  ...EXTRA_COMMERCIAL_DEFINITIONS,
+  ...EXTRA_VEHICLE_DEFINITIONS,
+  ...EXTRA_CAR_PART_DEFINITIONS,
+  ...EXTRA_SUBURBAN_DEFINITIONS,
   {
     id: "tree-small",
     label: "Small deciduous tree",

@@ -1,5 +1,8 @@
 import {
   BASE_MOVE_SPEED,
+  BOMB_COOLDOWN_SECONDS,
+  BOMB_FUSE_SECONDS,
+  BOMB_RADIUS_MULTIPLIER,
   BOT_DETECTION_RADIUS,
   BOT_SPEED_MULTIPLIER,
   HOLE_FIT_RATIO,
@@ -8,12 +11,17 @@ import {
   MOVE_SPEED_PER_LEVEL,
   ROAD_CENTERS,
   ROAD_WIDTH,
+  RADIUS_BOOST_COOLDOWN_SECONDS,
+  RADIUS_BOOST_DURATION_SECONDS,
   SPATIAL_HASH_CELL_SIZE,
+  SPEED_BOOST_COOLDOWN_SECONDS,
+  SPEED_BOOST_DURATION_SECONDS,
 } from "./constants";
 import { stepActivePhysics } from "./physics";
 import { getHoleProgress } from "./progression";
 import { SpatialHash } from "./spatialHash";
 import type {
+  AbilityId,
   BotState,
   HoleState,
   PlayerInput,
@@ -39,6 +47,26 @@ function normalize(vector: Vector2): Vector2 {
     return { x: 0, y: 0 };
   }
   return { x: vector.x / length, y: vector.y / length };
+}
+
+function radiusForHole(hole: HoleState, score = hole.score): number {
+  const baseRadius = getHoleProgress(score).radius;
+  if (hole.radiusBoostRemaining > 0) {
+    return baseRadius * 1.25;
+  }
+  return baseRadius;
+}
+
+function normalizedHole(hole: HoleState): HoleState {
+  return {
+    ...hole,
+    speedBoostRemaining: hole.speedBoostRemaining ?? 0,
+    speedBoostCooldown: hole.speedBoostCooldown ?? 0,
+    radiusBoostRemaining: hole.radiusBoostRemaining ?? 0,
+    radiusBoostCooldown: hole.radiusBoostCooldown ?? 0,
+    bombFuseRemaining: hole.bombFuseRemaining ?? 0,
+    bombCooldown: hole.bombCooldown ?? 0,
+  };
 }
 
 function canFitThroughHole(hole: HoleState, object: WorldObjectState): boolean {
@@ -200,7 +228,9 @@ function moveHole(hole: HoleState, direction: Vector2, deltaSeconds: number): Ho
   const normalized = normalize(direction);
   const limit = Math.max(0, MAP_HALF_SIZE - hole.radius);
   const levelSpeed = BASE_MOVE_SPEED + getHoleProgress(hole.score).level * MOVE_SPEED_PER_LEVEL;
-  const moveSpeed = hole.kind === "bot" ? levelSpeed * BOT_SPEED_MULTIPLIER : levelSpeed;
+  const boostMultiplier = hole.speedBoostRemaining > 0 ? 2 : 1;
+  const moveSpeed =
+    (hole.kind === "bot" ? levelSpeed * BOT_SPEED_MULTIPLIER : levelSpeed) * boostMultiplier;
   return {
     ...hole,
     position: {
@@ -208,6 +238,102 @@ function moveHole(hole: HoleState, direction: Vector2, deltaSeconds: number): Ho
       y: clamp(hole.position.y + normalized.y * moveSpeed * deltaSeconds, -limit, limit),
     },
   };
+}
+
+function updateAbilityState(
+  hole: HoleState,
+  requested: readonly AbilityId[],
+  deltaSeconds: number,
+): HoleState {
+  let next: HoleState = {
+    ...hole,
+    speedBoostRemaining: Math.max(0, (hole.speedBoostRemaining ?? 0) - deltaSeconds),
+    speedBoostCooldown: Math.max(0, (hole.speedBoostCooldown ?? 0) - deltaSeconds),
+    radiusBoostRemaining: Math.max(0, (hole.radiusBoostRemaining ?? 0) - deltaSeconds),
+    radiusBoostCooldown: Math.max(0, (hole.radiusBoostCooldown ?? 0) - deltaSeconds),
+    bombFuseRemaining: Math.max(0, (hole.bombFuseRemaining ?? 0) - deltaSeconds),
+    bombCooldown: Math.max(0, (hole.bombCooldown ?? 0) - deltaSeconds),
+  };
+  for (const ability of requested) {
+    if (ability === "speed" && next.speedBoostCooldown <= 0 && next.speedBoostRemaining <= 0) {
+      next = {
+        ...next,
+        speedBoostRemaining: SPEED_BOOST_DURATION_SECONDS,
+        speedBoostCooldown: SPEED_BOOST_COOLDOWN_SECONDS,
+      };
+    } else if (
+      ability === "radius" &&
+      next.radiusBoostCooldown <= 0 &&
+      next.radiusBoostRemaining <= 0
+    ) {
+      next = {
+        ...next,
+        radiusBoostRemaining: RADIUS_BOOST_DURATION_SECONDS,
+        radiusBoostCooldown: RADIUS_BOOST_COOLDOWN_SECONDS,
+      };
+    } else if (ability === "bomb" && next.bombCooldown <= 0 && next.bombFuseRemaining <= 0) {
+      next = { ...next, bombFuseRemaining: BOMB_FUSE_SECONDS, bombCooldown: BOMB_COOLDOWN_SECONDS };
+    }
+  }
+  const baseRadius = getHoleProgress(next.score).radius;
+  const radius =
+    next.radiusBoostRemaining > 0
+      ? baseRadius * 1.25
+      : hole.radiusBoostRemaining > 0
+        ? baseRadius
+        : hole.radius;
+  return { ...next, radius };
+}
+
+function resolveBombs(
+  previousHoles: readonly HoleState[],
+  holes: readonly HoleState[],
+): readonly HoleState[] {
+  const next = holes.map((hole) => ({ ...hole }));
+  for (let index = 0; index < next.length; index += 1) {
+    const bomber = next[index];
+    const previousBomber = previousHoles[index];
+    if (
+      !bomber ||
+      !previousBomber ||
+      previousBomber.bombFuseRemaining <= 0 ||
+      bomber.bombFuseRemaining > 0 ||
+      bomber.eliminationRemaining > 0 ||
+      bomber.isOut
+    ) {
+      continue;
+    }
+    const blastRadius = bomber.radius * BOMB_RADIUS_MULTIPLIER;
+    for (let targetIndex = 0; targetIndex < next.length; targetIndex += 1) {
+      if (targetIndex === index) continue;
+      const target = next[targetIndex];
+      if (
+        !target ||
+        target.eliminationRemaining > 0 ||
+        target.isOut ||
+        target.invulnerabilityRemaining > 0
+      ) {
+        continue;
+      }
+      if (
+        Math.hypot(target.position.x - bomber.position.x, target.position.y - bomber.position.y) >
+        blastRadius
+      ) {
+        continue;
+      }
+      const eliminations = target.eliminations + 1;
+      next[targetIndex] =
+        target.revivesRemaining > 0
+          ? {
+              ...target,
+              eliminationRemaining: HOLE_RESPAWN_SECONDS,
+              eliminations,
+              revivesRemaining: target.revivesRemaining - 1,
+            }
+          : { ...target, isOut: true, eliminations, eliminationRemaining: 0, bot: null };
+    }
+  }
+  return next;
 }
 
 function isFullyCoveredByHole(
@@ -289,6 +415,12 @@ function resolveHoleConsumption(
         radius: getHoleProgress(hole.score).radius,
         eliminationRemaining: 0,
         invulnerabilityRemaining: RESPAWN_INVULNERABILITY_SECONDS,
+        speedBoostRemaining: 0,
+        speedBoostCooldown: 0,
+        radiusBoostRemaining: 0,
+        radiusBoostCooldown: 0,
+        bombFuseRemaining: 0,
+        bombCooldown: 0,
         bot:
           hole.kind === "bot"
             ? {
@@ -343,7 +475,7 @@ function resolveHoleConsumption(
       nextHoles[winnerIndex] = {
         ...winner,
         score,
-        radius: getHoleProgress(score).radius,
+        radius: radiusForHole(winner, score),
       };
       const nextEliminations = loser.eliminations + 1;
       nextHoles[loserIndex] =
@@ -354,6 +486,12 @@ function resolveHoleConsumption(
               eliminationRemaining: HOLE_RESPAWN_SECONDS,
               eliminations: nextEliminations,
               revivesRemaining: loser.revivesRemaining - 1,
+              speedBoostRemaining: 0,
+              speedBoostCooldown: 0,
+              radiusBoostRemaining: 0,
+              radiusBoostCooldown: 0,
+              bombFuseRemaining: 0,
+              bombCooldown: 0,
               bot:
                 loser.kind === "bot"
                   ? {
@@ -571,7 +709,7 @@ function applyConsumedScores(
       return hole;
     }
     const score = hole.score + gainedScore;
-    return { ...hole, score, radius: getHoleProgress(score).radius };
+    return { ...hole, score, radius: radiusForHole(hole, score) };
   });
 }
 
@@ -585,21 +723,34 @@ export function stepSimulation(
   }
 
   const safeDelta = Math.min(deltaSeconds, 0.1);
-  const inputByPlayer = new Map(inputs.map((input) => [input.playerId, input.direction] as const));
+  const inputByPlayer = new Map(inputs.map((input) => [input.playerId, input] as const));
   let rngState = state.rngState;
-  const movedHoles = state.holes.map((hole) => {
+  const abilityHoles = state.holes.map((hole) =>
+    updateAbilityState(
+      normalizedHole(hole),
+      hole.eliminationRemaining > 0 || hole.isOut
+        ? []
+        : (inputByPlayer.get(hole.id)?.abilities ?? []),
+      safeDelta,
+    ),
+  );
+  const movedHoles = abilityHoles.map((hole) => {
     if (hole.eliminationRemaining > 0 || hole.isOut) {
       return hole;
     }
     if (hole.kind === "human") {
-      return moveHole(hole, inputByPlayer.get(hole.id) ?? { x: 0, y: 0 }, safeDelta);
+      return moveHole(hole, inputByPlayer.get(hole.id)?.direction ?? { x: 0, y: 0 }, safeDelta);
     }
     const decision = decideBotInput(hole, state.objects, safeDelta, rngState);
     rngState = decision.rngState;
     return moveHole({ ...hole, bot: decision.bot }, decision.direction, safeDelta);
   });
 
-  const holeResolution = resolveHoleConsumption(movedHoles, safeDelta, rngState);
+  const holeResolution = resolveHoleConsumption(
+    resolveBombs(abilityHoles, movedHoles),
+    safeDelta,
+    rngState,
+  );
   const competitiveHoles = holeResolution.holes;
   rngState = holeResolution.rngState;
   const previousStatusById = new Map(state.objects.map((object) => [object.id, object.status]));

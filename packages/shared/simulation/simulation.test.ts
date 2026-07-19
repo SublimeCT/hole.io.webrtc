@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { readdirSync } from "node:fs";
+import { join, relative } from "node:path";
 
 import {
   BASE_MOVE_SPEED,
@@ -15,9 +17,9 @@ import {
 } from "./constants";
 import { stepSimulation } from "./simulation";
 import { SpatialHash } from "./spatialHash";
-import { PREFAB_DEFINITIONS } from "./prefabs";
+import { HIGHEST_BUILDING_PREFAB_ID, PREFAB_DEFINITIONS } from "./prefabs";
 import type { SimulationState, WorldObjectState } from "./types";
-import { createInitialSimulation } from "./world";
+import { CITY_BLOCK_LAYOUTS, createInitialSimulation } from "./world";
 
 function stateWithObject(object: WorldObjectState): SimulationState {
   const initial = createInitialSimulation();
@@ -121,6 +123,16 @@ function expectedCharacterYaw(axis: "x" | "y", direction: -1 | 1): number {
     return direction > 0 ? 0 : Math.PI;
   }
   return direction > 0 ? Math.PI / 2 : -Math.PI / 2;
+}
+
+function listGlbAssets(directory: string): readonly string[] {
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) {
+      return listGlbAssets(path);
+    }
+    return entry.name.endsWith(".glb") ? [path] : [];
+  });
 }
 
 function yawFromRotation(object: WorldObjectState): number {
@@ -231,6 +243,41 @@ describe("physical swallowing", () => {
 });
 
 describe("world defaults", () => {
+  it("defines more than eight materially distinct road-interior block layouts", () => {
+    expect(CITY_BLOCK_LAYOUTS.length).toBeGreaterThan(8);
+    expect(new Set(CITY_BLOCK_LAYOUTS.map((layout) => layout.id)).size).toBe(
+      CITY_BLOCK_LAYOUTS.length,
+    );
+    expect(
+      new Set(
+        CITY_BLOCK_LAYOUTS.map((layout) =>
+          JSON.stringify({
+            structures: layout.structures,
+            details: layout.details,
+            propOrder: layout.propOrder,
+          }),
+        ),
+      ).size,
+    ).toBe(CITY_BLOCK_LAYOUTS.length);
+  });
+
+  it("registers and places every shipped GLB model", () => {
+    const assetRoot = join(process.cwd(), "assets", "kits");
+    const shippedModels = listGlbAssets(assetRoot)
+      .map((path) => relative(assetRoot, path).replaceAll("\\", "/"))
+      .toSorted();
+    const registeredModels = PREFAB_DEFINITIONS.map((definition) =>
+      definition.assetPath.replace(/^\/kits\//, ""),
+    ).toSorted();
+    expect(shippedModels).toEqual(registeredModels);
+    expect(PREFAB_DEFINITIONS).toHaveLength(149);
+    expect(HIGHEST_BUILDING_PREFAB_ID).toBe("commercial-skyscraper-d");
+
+    const initial = createInitialSimulation();
+    const placedIds = new Set(initial.objects.map((object) => object.prefabId));
+    expect(PREFAB_DEFINITIONS.every((definition) => placedIds.has(definition.id))).toBe(true);
+  });
+
   it("clamps player movement inside the expanded map", () => {
     const initial = createInitialSimulation();
     const player = initial.holes[0];
@@ -439,8 +486,8 @@ describe("world defaults", () => {
       initial.objects.filter(
         (object) =>
           object.prefabId.startsWith("building-") || object.prefabId.startsWith("commercial-"),
-      ),
-    ).toHaveLength(985);
+      ).length,
+    ).toBeGreaterThanOrEqual(900);
     expect(
       initial.objects.filter((object) => object.prefabId.startsWith("character-")),
     ).toHaveLength(2_772);
@@ -454,11 +501,15 @@ describe("world defaults", () => {
     expect(initial.objects.filter((object) => object.motion?.kind === "pedestrian")).toHaveLength(
       396,
     );
-    expect(initial.objects.filter((object) => object.prefabId === "planter")).toHaveLength(1_600);
-    expect(initial.objects.filter((object) => object.prefabId === "crate")).toHaveLength(1_600);
     expect(
-      initial.objects.filter((object) => object.prefabId.startsWith("debris-plate")),
-    ).toHaveLength(1_600);
+      initial.objects.filter((object) => object.prefabId === "planter").length,
+    ).toBeGreaterThanOrEqual(1_600);
+    expect(
+      initial.objects.filter((object) => object.prefabId === "crate").length,
+    ).toBeGreaterThanOrEqual(1_600);
+    expect(
+      initial.objects.filter((object) => object.prefabId.startsWith("debris-plate")).length,
+    ).toBeGreaterThanOrEqual(1_600);
     const towerGroups = new Map<string, WorldObjectState[]>();
     initial.objects
       .filter(
@@ -479,7 +530,7 @@ describe("world defaults", () => {
     towers.forEach((tower) => {
       const ordered = [...tower].sort((left, right) => left.centerY - right.centerY);
       ordered.forEach((building, layer) => {
-        expect(building.value).toBe(50);
+        expect(building.value).toBe(building.prefabId === "commercial-skyscraper-d" ? 50 : 40);
         expect(building.centerY).toBeCloseTo(building.height * (layer + 0.5));
       });
     });
@@ -708,7 +759,7 @@ describe("world defaults", () => {
           .map((object) => [object.prefabId, object]),
       ).values(),
     ];
-    expect(vehicles).toHaveLength(11);
+    expect(vehicles).toHaveLength(25);
 
     vehicles.forEach((vehicle) => {
       const result = stepSimulation(

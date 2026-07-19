@@ -16,12 +16,14 @@
 | 倾倒/下落物体处理  | 仅与洞口接触的活跃物体使用 cannon-es 和 `16.2m/s²` 下落加速度；质量为 `clamp(28 + 10 × cbrt(体积), 28, 120)`，反弹系数为 `0`                                                                       | ✅ 已实现 |
 | 地下井壁           | 透明井壁和深处底面只渲染，不创建 Cannon shape；物体可无碰撞穿过井壁，只有地表洞缘参与碰撞                                                                                                          | ✅ 已实现 |
 | 成长等级           | 阈值锚点半径：`0/1.15`、`12/1.75`、`40/2.55`、`110/3.5`、`260/4.6`、`600/5.8`、`1200/7.2`、`2400/8.8`、`4500/10.6`、`8000/12.6`；相邻锚点间随积分连续插值，`8000` 分后按面积比例持续增长           | ✅ 已实现 |
-| 物体分值           | `max(1, round(接地面积 × 4))`；建筑物在该基础上乘以 `8` 倍建筑加成；建筑物单体分值封顶 `50`，非建筑物单体分值封顶 `30`                                                                             | ✅ 已实现 |
+| 物体分值           | 普通建筑物 `40` 分；最高建筑 prefab `commercial-skyscraper-d` 为 `50` 分；汽车 `30` 分；其它物体按接地面积计算并封顶 `30` 分                                                                       | ✅ 已实现 |
 | 单局时长           | `180s`                                                                                                                                                                                             | ✅ 已实现 |
 | 玩家移动速度       | 人类玩家初始 `8.2m/s`，每提升一个尺寸等级增加 `0.45m/s`；Bot 使用对应速度的 `56%`；始终快于 `4.5m/s` 车辆                                                                                          | ✅ 已实现 |
 | 单机 bot 数量/行为 | `2` 个；仅在 `14m` 本地范围选择最近的可吞噬目标，不按物体价值最大化；保持目标承诺，仅在目标失效或新目标距离明显更近时切换；物体激活后继续移动至中心直至计分                                        | ✅ 已实现 |
 | 玩家初始出生       | 地图布局固定、出生 seed 每局随机；三名玩家间距至少为初始直径加 `12m` 安全距离，且出生洞口与全部初始地图物体保持安全间距，禁止重叠                                                                  | ✅ 已实现 |
 | 玩家间吞噬         | 仅当大洞半径严格大于小洞，且小洞圆形完全被大洞覆盖时吞噬；胜者获得 `max(12, 被吞噬者分数 × 0.6)`；每位玩家仅可复活 `1` 次，阵亡 `1.8s` 后按原积分和尺寸随机安全重生并无敌 `5s`，第二次阵亡永久出局 | ✅ 已实现 |
+| 技能               | `Q` 🚀 移速 `×2` 持续 `5s`、冷却 `20s`；`E` 🌪️ 黑洞范围 `+25%` 持续 `5s`、冷却 `60s`；`R` 💣 自爆倒计时 `3s`、冷却 `120s`，爆炸影响自身黑洞外围 `100%` 半径内玩家且不加分；复活后技能状态重置      | ✅ 已实现 |
+| 小物体距离裁剪     | 客户端隐藏本地玩家 `150m` 外、分值小于 `10` 且不可移动的静态物体；模拟和 bot 吞噬判定仍保留全地图对象                                                                                              | ✅ 已实现 |
 | 联机房间人数上限   | 待定，需结合 host 上行带宽估算（参考 §联机 - 带宽）                                                                                                                                                | 📝        |
 
 ## 单机模式
@@ -30,7 +32,7 @@
 - Bot AI：✅ 已实现追逐/游荡状态机。
 - 使用 `packages/shared/simulation` 以固定 `60Hz` 权威循环运行，本地直接调用，无广播开销。
 - 性能：✅ 菜单和结算状态只保留静态渲染；对局结束、页面进入后台时停止动画循环，页面恢复或重新开始时恢复。
-- HUD：✅ 比赛显示玩家分数、尺寸等级、半径、下一级进度、剩余时间和包括人类玩家的三人实时排名；屏幕边缘显示带圆弧尾部的 Bot 方向/距离 SVG 箭头；吞噬时播放 transform/opacity `+分值` 动画和合成吞噬音效，移动设备触发短震动；对局中和结算界面均可返回主页；结束后显示完整三人最终排名，`R` 可重新开始。
+- HUD：✅ 比赛显示玩家分数、尺寸等级、半径、下一级进度、剩余时间和包括人类玩家的三人实时排名；技能卡仅在对局中显示，以整块背景填充表示冷却并显示激活/引信/充能状态；屏幕边缘显示带圆弧尾部的 Bot 方向/距离 SVG 箭头；吞噬时播放 transform/opacity `+分值` 动画和合成吞噬音效，移动设备触发短震动；对局中和结算界面均可返回主页；结束后显示完整三人最终排名，`R` 可重新开始。
 - 开局菜单：✅ “开始游戏”作为默认当前按钮并显示 `Enter`，主键盘/小键盘 `Enter` 触发开始；方向键在四个按钮间循环聚焦，当前按钮显示 `Enter`，未聚焦的 `Enter` 不会开始对局；移动端隐藏该提示。右下角显示实际对局信息：单机、3 名玩家、3 分钟、1 次复活。弹窗确认使用 `Enter`，取消使用 `Esc`，不处理方向键焦点移动。设置保存长度 `1–9` 的玩家名称和 `12` 种本地黑洞圆环颜色；联机游玩显示开发中提示；分享优先调用浏览器分享面板，不可用时复制当前游戏链接。
 - 阵亡表现：✅ 首次被吞噬显示高对比度黄色 `K.O.` 并在复活后保留该局次数；第二次被吞噬显示 `OUT` 并永久出局，玩家永久出局立即进入最终结算。
 - 领先标识：✅ 当前第一名黑洞上方显示皇冠，显示尺寸随黑洞半径等比例缩放。
@@ -38,70 +40,81 @@
 
 ## 联机模式
 
-| 项            | 值                                                          | 状态        |
-| ------------- | ----------------------------------------------------------- | ----------- |
-| 架构          | Host 权威广播（星型拓扑），非全 mesh                        | 📝          |
-| 建连流程      | WebSocket 信令交换 SDP/ICE → WebRTC DataChannel             | 🚧          |
-| 打洞失败兜底  | TURN 中继（coturn，部署在阿里云轻量服务器）                 | 📝          |
-| 输入包频率    | 约 30Hz，仅含方向向量，不含位置/分数                        | 📝          |
-| 快照广播频率  | 约 10Hz                                                     | 📝          |
-| Host 掉线处理 | v1：房间解散，所有人回退单机继续（不做 host 迁移）          | ✅ 已实现   |
-| 反作弊        | 不做，休闲游戏可接受 host 结构性作弊风险，见 `AGENTS.md` §8 | ✅ 决策已定 |
+| 项            | 值                                                                                         | 状态        |
+| ------------- | ------------------------------------------------------------------------------------------ | ----------- |
+| 架构          | Host 权威广播（星型拓扑），非全 mesh                                                       | 📝          |
+| 建连流程      | WSS 建房/加入 → signal 交换 SDP/ICE → P2P 星型 DataChannel；start-match 后 WSS 可断        | 🚧          |
+| 打洞失败兜底  | TURN 中继（coturn auth-secret，`infra/` docker-compose 已配）                              | 🚧          |
+| 输入包频率    | 约 30Hz，仅含方向向量，不含位置/分数                                                       | 📝          |
+| 快照广播频率  | 约 10Hz                                                                                    | 📝          |
+| Host 掉线处理 | lobby 阶段 host 断 → room-closed 解散；playing 阶段 host 断 → 不解散（P2P 自治，不做迁移） | ✅ 已实现   |
+| 反作弊        | 不做，休闲游戏可接受 host 结构性作弊风险，见 `AGENTS.md` §8                                | ✅ 决策已定 |
 
 ## 联机协议
 
-协议类型的唯一真源是 `packages/shared/protocol`（client 与 server 直接 `import`，禁止两端各维护一份）。下表只描述消息清单与关键语义，完整字段定义以源码为准。信令服务地址 `wss://<host>/ws`。
+协议类型的唯一真源是 `packages/shared/protocol`（client 与 server 直接 `import`，禁止两端各维护一份）。下表只描述消息清单与关键语义，完整字段定义以源码为准。信令服务地址 `wss://<host>/ws`，单条 WSS 通道同时管房间管理、信令、生命周期。
 
-### 信令消息（客户端 ↔ 信令服务，WebSocket JSON）
+### 房间状态机
 
-客户端 → 服务端：
+`lobby`（创建即起 3 分钟 idle，未 `start-match` 则自动关）→ `playing`（host `start-match` 后，WSS 可断，host 断不解散）→ `closed`（`room-closed` 推送 + roomId 销毁）。
 
-| type          | 关键字段                | 说明                                          |
-| ------------- | ----------------------- | --------------------------------------------- |
-| create-room   | playerName              | 创建房间，调用者成为 host                     |
-| join-room     | roomCode, playerName    | 加入指定房间                                  |
-| sdp-offer     | targetPeerId, sdp       | 请服务端定向转发 SDP offer                    |
-| sdp-answer    | targetPeerId, sdp       | 定向转发 SDP answer                           |
-| ice-candidate | targetPeerId, candidate | candidate 为序列化 `RTCIceCandidateInit` JSON |
+### WSS 消息（client → server）
 
-服务端 → 客户端：
+| type        | 关键字段                | 说明                                                                                                                    |
+| ----------- | ----------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| create-room | playerName              | 建房，调用者成为 host，server 创建 roomId                                                                               |
+| join-room   | roomCode, playerName    | 用 roomId 加入                                                                                                          |
+| start-match | —                       | host 专用：所有 P2P 建立成功后发，房间转 playing、取消 idle、此后 host 断不解散                                         |
+| close-room  | —                       | host 专用：主动解散                                                                                                     |
+| signal      | toPeerId, kind, payload | 统一信令透传；kind ∈ `offer`\|`answer`\|`ice`；payload 为序列化 SDP/ICE JSON；server 不解 payload，按 toPeerId 同房路由 |
 
-| type              | 关键字段                                    | 说明                                                     |
-| ----------------- | ------------------------------------------- | -------------------------------------------------------- |
-| room-created      | roomCode, peerId, isHost=true               | 建房成功                                                 |
-| room-joined       | roomCode, peerId, hostPeerId, existingPeers | 加入成功；existingPeers 用于向已有 peer 发起 mesh SDP    |
-| peer-joined       | peer { peerId, playerName }                 | 广播给房内已有 peer                                      |
-| peer-left         | peerId                                      | 某成员断开，广播给剩余 peer                              |
-| host-disconnected | —                                           | host 掉线，房间解散，所有 guest 回退单机（§8）           |
-| sdp-offer         | fromPeerId, sdp                             | 转发变体（出站 targetPeerId → 入站 fromPeerId）          |
-| sdp-answer        | fromPeerId, sdp                             | 转发变体                                                 |
-| ice-candidate     | fromPeerId, candidate                       | 转发变体                                                 |
-| room-error        | code, message                               | code ∈ `ROOM_NOT_FOUND` \| `ROOM_FULL` \| `INVALID_CODE` |
+### WSS 消息（server → client）
 
-房间码：4 位去歧义字母数字（`A-Z` 排除 `O`/`I`，`2-9` 排除 `0`/`1`），约 81 万空间。
+| type         | 关键字段                                          | 说明                                              |
+| ------------ | ------------------------------------------------- | ------------------------------------------------- |
+| room-created | roomCode, peerId, turn                            | 建房成功（创建者即 host）                         |
+| room-joined  | roomCode, peerId, hostPeerId, existingPeers, turn | 加入成功；existingPeers 用于向已有 peer 发 signal |
+| peer-joined  | peer { peerId, playerName, isHost }               | 新成员加入，广播给房内已有 peer                   |
+| peer-left    | peerId                                            | 某成员 WSS 断开，广播给剩余 peer                  |
+| room-closed  | reason ∈ `host-left`\|`idle`\|`closed`            | 房间解散，**server 推送**（非任何 peer 发送）     |
+| signal       | fromPeerId, kind, payload                         | 转发信令（出站 toPeerId 改写为入站 fromPeerId）   |
+| room-error   | code, message                                     | 见下                                              |
 
-### 输入包（客户端 → host，约 30Hz）
+`room-error.code` ∈ `ROOM_NOT_FOUND` \| `ROOM_FULL` \| `NOT_HOST` \| `EMPTY` \| `ALREADY_STARTED` \| `INVALID_CODE`。房间码 4 位去歧义字母数字（`A-Z` 排除 `O`/`I`，`2-9` 排除 `0`/`1`），约 81 万空间。
 
-仅 `seq` + 归一化 `direction` + `clientTime`，绝不携带位置/分数（AGENTS.md §0.1 硬性规则）。
+### TURN 中继
 
-### 状态快照（host → 所有客户端，约 10Hz）
+打洞失败走 coturn（auth-secret 短期凭证）。建房/加入时 server 在 `room-created`/`room-joined` 顺带返回 `turn { username, credential, ttl, uris }`：username = `"{expiry}:{peerId}"`，credential = `base64(hmac-sha1(TURN_SECRET, username))`，与 coturn `use-auth-secret` + `static-auth-secret` 共享同一 secret 校验。客户端塞进 `RTCPeerConnection.iceServers`。配置见 `infra/docker-compose.yml` + `infra/coturn/turnserver.conf`。
 
-`seq` + `serverTime` + `players[]`（peerId/position/radius/score）+ `consumedObjectIds[]`。地图静止物体不入快照（客户端本地已知初始状态）；活跃物体位姿字段待 Phase 3 实现时补充。
+### P2P 星型拓扑
 
-### 防滥用参数（服务端默认值，env 可覆盖）
+每个 guest 只与 host 建一条 `RTCPeerConnection`（非 mesh）。握手经 WSS `signal` 交换 SDP/ICE 完成；host `start-match` 后 WSS 可断（除非走 TURN）。
 
-| 项                        | 默认值  |
-| ------------------------- | ------- |
-| 全局并发连接上限          | `1000`  |
-| 单 IP 并发连接上限        | `20`    |
-| 单 IP 每分钟建连数        | `60`    |
-| 全局房间数上限            | `200`   |
-| 房间人数上限              | `4`     |
-| 单连接消息速率            | `60/s`  |
-| 连接 idle 超时（未 join） | `10s`   |
-| WS 单包上限               | `256KB` |
+### DataChannel 实时同步（host ↔ guests，不经信令服务）
 
-超限行为：origin 不在白名单 → HTTP `403`；连接/速率超限 → HTTP `429`；房间满 → `room-error ROOM_FULL`；建房数超限 → `room-error INVALID_CODE`。这是缓解层，非根治（AGENTS.md §8）。
+| 项                         | 字段                                                                                                                        | channel    |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| 输入包 guest→host ~30Hz    | `seq`, 归一化 `direction`, `clientTime`, `abilities?`                                                                       | unreliable |
+| 状态快照 host→guests ~10Hz | `seq`, `serverTime`, `elapsed`, `remaining`, `status`, `players[]`, `activeObjects[]`, `consumedObjectIds[]`                | unreliable |
+| 关键事件                   | `match-start { seed, matchDurationSeconds, players[] }`、`match-end { ranking }`（host 经 DataChannel 广播，server 不参与） | reliable   |
+
+`players[]` 照 simulation `HoleState`（position/radius/score/eliminations/revivesRemaining/eliminationRemaining/invulnerabilityRemaining/isOut + 技能 boost/cooldown）；`activeObjects[]` 照 `WorldObjectState`（下落/倾倒中物体的 id/position/centerY/rotation/velocity/angularVelocity/activeTime）。输入包绝不携带位置/分数（AGENTS.md §0.1 硬性规则）。
+
+**车辆/行人不进快照**：它们是确定性 route 运动（基于 elapsed），guest 用 host 的 `elapsed` + 地图初始 `routeMotion` + simulation 的 route/交通灯逻辑本地推算（AGENTS.md §4「客户端本地已知的不传」）。地图静止物体同样不进快照。
+
+### 防滥用参数（服务端默认值，env 可覆盖，独立 `packages/server/src/config/abuse.ts`）
+
+| 项                         | 默认值  |
+| -------------------------- | ------- |
+| 全局并发连接上限           | `100`   |
+| 单 IP 并发连接上限         | `5`     |
+| 全局房间数上限             | `20`    |
+| 房间人数上限               | `4`     |
+| 单连接信令速率             | `60/s`  |
+| 房间 idle 超时（未 start） | `180s`  |
+| WS 单包上限                | `256KB` |
+
+超限行为：origin 不在白名单 → `403`；连接超限 → `429`；建房数超限 / 空房 start / 非 host 操作 → `room-error`。这是缓解层，非根治（AGENTS.md §8）。
 
 ## 地图系统
 
@@ -112,9 +125,9 @@
 | 地图数量（v1）   | 待定                                                                                                                                                                                                                                  | 📝        |
 | 程序化生成       | v1 不做，Phase 2 之后视情况引入                                                                                                                                                                                                       | 📝        |
 | 每地图预制件规模 | 待定                                                                                                                                                                                                                                  | 📝        |
-| Phase 1 城市场景 | `484 × 484m`；11 条横向和 11 条纵向道路，中心距 `44m`，144 个道路间地块，共 `13805` 个 Kenney 物体；初始及移动路线的物体包围盒不相交                                                                                                  | ✅ 已实现 |
-| 城市街区/预制件  | 六类街区（商业街墙、住宅围栏、绿地、服务区、高层区、混合庭院）；`PREFAB_DEFINITIONS` 中的每一种建筑、车辆、人物、树木、围栏与道具均至少出现一次，并由自动化测试覆盖                                                                   | ✅ 已实现 |
-| 城市物体构成     | 建筑 `985`、车辆 `264`、人物 `2772`（原数量三倍，其中移动人物 `396`）、花箱 `1600`、纸箱 `1600`、车辆散件 `1600`；其余道具经占用网格校验后布置                                                                                        | ✅ 已实现 |
+| Phase 1 城市场景 | `484 × 484m`；11 条横向和 11 条纵向道路，中心距 `44m`，144 个道路间地块，共 `14158` 个 Kenney 物体；初始及移动路线的物体包围盒不相交                                                                                                  | ✅ 已实现 |
+| 城市街区/预制件  | 十类道路间街区：零售广场、塔楼庭院、口袋公园、服务后场、围合住宅、混合庭院、汽车前场、花园步廊、线性市集、市民广场；资产目录 `149` 个 GLB 与 `PREFAB_DEFINITIONS` 一一对应，且每种模型每局至少出现一次，并由自动化测试覆盖            | ✅ 已实现 |
+| 城市物体构成     | 建筑不少于 `900`、车辆 `264`、人物 `2772`（其中移动人物 `396`）、花箱/纸箱/金属板各不少于 `1600`；其余模型经占用网格和路线走廊校验后布置                                                                                              | ✅ 已实现 |
 | 积分建筑堆叠     | 每局按 seed 从任意建筑类型随机选择 `3 × 玩家数 = 9` 个基座；每座由 `10` 个独立建筑层组成，每层独立下落、吞噬和计分，单层建筑分值封顶 `50`                                                                                             | ✅ 已实现 |
 | 道路比例         | 双向道路宽 `7m`，两侧人行道各宽 `1.5m`；黄色中心虚线；121 个路口均有四向斑马线；轿车约 `2 × 4.2 × 1.6m`                                                                                                                               | ✅ 已实现 |
 | 城市交通         | 264 辆车以 `4.5m/s` 沿独立车道、`88m` 初始间隔循环；横向/纵向各 `6s` 绿灯，切换前后各 `2s` 全红；2772 名人物只位于对应方向人行道，其中 396 名以 `1.15m/s` 沿单段人行道循环步行；车辆/人物只在洞完整覆盖且可通过时下落，否则持续原路线 | ✅ 已实现 |
@@ -141,8 +154,9 @@
 
 ## 变更记录
 
-| 日期       | 变更                                                                                                                                    | 关联 Phase   |
-| ---------- | --------------------------------------------------------------------------------------------------------------------------------------- | ------------ |
-| 2026-07-19 | 初始 SPEC 建立，架构决策落定（技术栈、host 广播架构、存档事件化）                                                                       | Phase 0 之前 |
-| 2026-07-19 | Phase 1 单机版本完成：权威模拟、物理洞缘、城市地图、交通/人物、Bot、吞噬成长、重生、HUD、菜单、音效和无阴影渲染；具体规则以本文各表为准 | Phase 0-1    |
-| 2026-07-19 | 联机信令、协议与防滥用参数已记录；具体实现状态以“联机模式”章节为准                                                                      | Phase 3      |
+| 日期       | 变更                                                                                                                                                                                            | 关联 Phase   |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ |
+| 2026-07-19 | 初始 SPEC 建立，架构决策落定（技术栈、host 广播架构、存档事件化）                                                                                                                               | Phase 0 之前 |
+| 2026-07-19 | Phase 1 单机版本完成：权威模拟、物理洞缘、城市地图、交通/人物、Bot、吞噬成长、重生、HUD、菜单、音效和无阴影渲染；具体规则以本文各表为准                                                         | Phase 0-1    |
+| 2026-07-19 | 联机信令、协议与防滥用参数已记录；具体实现状态以“联机模式”章节为准                                                                                                                              | Phase 3      |
+| 2026-07-19 | 协议重设计为 WSS-only（房间管理+信令+生命周期单通道）+ 房间状态机（lobby/playing/closed，3 分钟 idle）+ TURN coturn auth-secret 中继 + DataChannel 实时同步完整定义；防滥用独立配置（100/5/20） | Phase 3      |

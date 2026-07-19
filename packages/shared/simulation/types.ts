@@ -18,6 +18,7 @@ export interface Quaternion {
 
 export type HoleKind = "human" | "bot";
 export type BotMode = "wander" | "chase";
+export type AbilityId = "speed" | "radius" | "bomb";
 
 export interface BotState {
   mode: BotMode;
@@ -39,6 +40,12 @@ export interface HoleState {
   eliminations: number;
   revivesRemaining: number;
   invulnerabilityRemaining: number;
+  speedBoostRemaining: number;
+  speedBoostCooldown: number;
+  radiusBoostRemaining: number;
+  radiusBoostCooldown: number;
+  bombFuseRemaining: number;
+  bombCooldown: number;
   isOut: boolean;
   bot: BotState | null;
 }
@@ -95,6 +102,7 @@ export interface SimulationState {
 export interface PlayerInput {
   playerId: string;
   direction: Vector2;
+  abilities?: readonly AbilityId[];
 }
 
 export type SimulationEvent = {

@@ -1,18 +1,37 @@
-// 协议真源：WebRTC 信令消息（客户端 ↔ 信令服务，WebSocket JSON）。
-// 对应 AGENTS.md §4「信令消息」——建连阶段交换 SDP/ICE，DataChannel 建立后信令连接可断开。
-// 纯类型定义（erasable TS，无 enum/namespace/参数属性），client 与 server 共用，禁止两边各维护一份。
+// 协议真源：WebRTC 信令 + 房间管理（客户端 ↔ 信令服务，单一 WSS 通道，JSON）。
+// 对应 AGENTS.md §4。纯类型定义（erasable TS），client 与 server 共用，禁止两边各维护一份。
+// 信令服务地址 wss://<host>/ws。握手（signal 交换 SDP/ICE）建立 P2P 星型后，WSS 可断（除非走 TURN）。
 
-/** 服务端为每条 WebSocket 连接分配的 peer 标识（crypto.randomUUID）。 */
 export type PeerId = string;
-
-/** 房间码，4 位去歧义字母数字（生成逻辑在 server 端，此处仅约束类型）。 */
 export type RoomCode = string;
-
-export type RoomErrorCode = "ROOM_NOT_FOUND" | "ROOM_FULL" | "INVALID_CODE";
+export type SignalKind = "offer" | "answer" | "ice";
 
 export interface PeerInfo {
   peerId: PeerId;
   playerName: string;
+  isHost: boolean;
+}
+
+export type RoomClosedReason = "host-left" | "idle" | "closed";
+
+export type RoomErrorCode =
+  | "ROOM_NOT_FOUND"
+  | "ROOM_FULL"
+  | "NOT_HOST"
+  | "EMPTY"
+  | "ALREADY_STARTED"
+  | "INVALID_CODE";
+
+/** coturn auth-secret 短期凭证，建房/加入时下发，客户端塞进 RTCPeerConnection.iceServers。 */
+export interface TurnCredentials {
+  /** "{expiryEpoch}:{peerId}"，coturn 按 use-auth-secret 校验。 */
+  username: string;
+  /** hmac-sha1(secret, username) 的 hex。 */
+  credential: string;
+  /** 有效期（秒）。 */
+  ttl: number;
+  /** TURN 服务器地址列表，如 "turn:host:3478?transport=udp"。 */
+  uris: readonly string[];
 }
 
 // ===== client → server =====
@@ -28,32 +47,31 @@ export interface JoinRoomMessage {
   playerName: string;
 }
 
-/** 客户端发起 SDP offer，请服务端定向转发给 targetPeerId。 */
-export interface SdpOfferOutMessage {
-  type: "sdp-offer";
-  targetPeerId: PeerId;
-  sdp: string;
+/** host 专用：确认与房内所有 guest 的 P2P 连接建立成功后发送，告知 server 房间进入 playing。 */
+export interface StartMatchMessage {
+  type: "start-match";
 }
 
-export interface SdpAnswerOutMessage {
-  type: "sdp-answer";
-  targetPeerId: PeerId;
-  sdp: string;
+/** host 专用：主动解散房间。 */
+export interface CloseRoomMessage {
+  type: "close-room";
 }
 
-/** candidate 为序列化后的 RTCIceCandidateInit JSON 串，避免依赖浏览器 webrtc 类型。 */
-export interface IceCandidateOutMessage {
-  type: "ice-candidate";
-  targetPeerId: PeerId;
-  candidate: string;
+/** 统一信令消息：server 不解 payload，只按 toPeerId 在同房内路由。 */
+export interface SignalOutMessage {
+  type: "signal";
+  toPeerId: PeerId;
+  kind: SignalKind;
+  /** 序列化的 SDP 或 RTCIceCandidateInit JSON。 */
+  payload: string;
 }
 
 export type ClientToServerMessage =
   | CreateRoomMessage
   | JoinRoomMessage
-  | SdpOfferOutMessage
-  | SdpAnswerOutMessage
-  | IceCandidateOutMessage;
+  | StartMatchMessage
+  | CloseRoomMessage
+  | SignalOutMessage;
 
 // ===== server → client =====
 
@@ -61,23 +79,18 @@ export interface RoomCreatedMessage {
   type: "room-created";
   roomCode: RoomCode;
   peerId: PeerId;
-  isHost: true;
+  /** 创建者即 host，isHost 隐含为 true。 */
+  turn: TurnCredentials;
 }
 
 export interface RoomJoinedMessage {
   type: "room-joined";
   roomCode: RoomCode;
   peerId: PeerId;
-  isHost: false;
   hostPeerId: PeerId;
-  /** 加入前已在房内的其他 peer（含 host），供新加入者发起 mesh SDP offer。 */
-  existingPeers: PeerInfo[];
-}
-
-export interface RoomErrorMessage {
-  type: "room-error";
-  code: RoomErrorCode;
-  message: string;
+  /** 加入前已在房内的其他 peer（含 host），供新加入者向其发起 signal。 */
+  existingPeers: readonly PeerInfo[];
+  turn: TurnCredentials;
 }
 
 export interface PeerJoinedMessage {
@@ -90,37 +103,37 @@ export interface PeerLeftMessage {
   peerId: PeerId;
 }
 
-/** host 掉线 → 房间解散，所有 guest 应回退单机（AGENTS.md §8）。 */
-export interface HostDisconnectedMessage {
-  type: "host-disconnected";
+/**
+ * 房间关闭，由 server 推送（非任何 peer 发送）：
+ * - host-left：lobby 阶段 host 的 WSS 断开。
+ * - idle：房间创建后 3 分钟内未 start-match。
+ * - closed：host 主动 close-room。
+ * 注意：playing 阶段 host 断开不触发房间关闭（游戏进入纯 P2P 自治）。
+ */
+export interface RoomClosedMessage {
+  type: "room-closed";
+  reason: RoomClosedReason;
 }
 
-// 转发变体：服务端把出站 SDP/ICE 改写为 fromPeerId 后定向投递给目标 peer。
-export interface SdpOfferRelayMessage {
-  type: "sdp-offer";
+/** server 转发的信令：把出站 toPeerId 改写为入站 fromPeerId（发送者）。 */
+export interface SignalInMessage {
+  type: "signal";
   fromPeerId: PeerId;
-  sdp: string;
+  kind: SignalKind;
+  payload: string;
 }
 
-export interface SdpAnswerRelayMessage {
-  type: "sdp-answer";
-  fromPeerId: PeerId;
-  sdp: string;
-}
-
-export interface IceCandidateRelayMessage {
-  type: "ice-candidate";
-  fromPeerId: PeerId;
-  candidate: string;
+export interface RoomErrorMessage {
+  type: "room-error";
+  code: RoomErrorCode;
+  message: string;
 }
 
 export type ServerToClientMessage =
   | RoomCreatedMessage
   | RoomJoinedMessage
-  | RoomErrorMessage
   | PeerJoinedMessage
   | PeerLeftMessage
-  | HostDisconnectedMessage
-  | SdpOfferRelayMessage
-  | SdpAnswerRelayMessage
-  | IceCandidateRelayMessage;
+  | RoomClosedMessage
+  | SignalInMessage
+  | RoomErrorMessage;

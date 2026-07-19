@@ -224,6 +224,46 @@
         <div class="growth-track"><i id="growth-fill"></i></div>
       </section>
 
+      <section class="ability-bar" aria-label="技能">
+        <button
+          id="ability-speed"
+          class="ability-button ability-speed"
+          type="button"
+          aria-label="移速提升，快捷键 Q"
+        >
+          <b class="ability-icon" aria-hidden="true">🚀</b>
+          <span class="ability-copy"
+            ><strong>Q · BOOST</strong><small id="ability-speed-status">READY</small></span
+          >
+          <em id="ability-speed-cooldown"></em>
+        </button>
+        <button
+          id="ability-radius"
+          class="ability-button ability-radius"
+          type="button"
+          aria-label="黑洞范围提升，快捷键 E"
+        >
+          <b class="ability-icon" aria-hidden="true">🌪️</b>
+          <span class="ability-copy"
+            ><strong>E · VORTEX</strong><small id="ability-radius-status">READY</small></span
+          >
+          <em id="ability-radius-cooldown"></em>
+        </button>
+        <button
+          id="ability-bomb"
+          class="ability-button ability-bomb"
+          type="button"
+          aria-label="自爆炸弹，快捷键 R"
+        >
+          <b class="ability-icon" aria-hidden="true">💣</b>
+          <span class="ability-copy"
+            ><strong>R · BOMB</strong><small id="ability-bomb-status">READY</small></span
+          >
+          <em id="ability-bomb-cooldown"></em>
+        </button>
+      </section>
+      <div id="ability-feedback" class="ability-feedback" aria-live="polite"></div>
+
       <div id="score-effects" class="score-effects" aria-hidden="true"></div>
 
       <div class="direction-layer opponent-indicators" aria-hidden="true">

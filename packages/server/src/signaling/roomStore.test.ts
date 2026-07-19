@@ -1,113 +1,157 @@
-import { describe, it, expect, vi } from "vitest";
-import { RoomStore, type SendableSocket } from "./roomStore.js";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { RoomStore } from "./roomStore.js";
 
-function mockSocket(): SendableSocket {
-  return { send: vi.fn(), readyState: 1 };
+function makeStore(maxPeers = 4, roomIdleMs = 1000): RoomStore {
+  return new RoomStore({ maxPeers, roomIdleMs, now: () => 0 });
 }
 
 describe("RoomStore", () => {
-  it("creates a room with the creator as host", () => {
-    const store = new RoomStore();
-    const room = store.createRoom({ peerId: "p1", playerName: "alice", ws: mockSocket() });
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
 
+  it("creates a room in lobby with host as first peer", () => {
+    const store = makeStore();
+    const room = store.createRoom({ peerId: "h", playerName: "host" });
+    expect(room.status).toBe("lobby");
+    expect(room.hostPeerId).toBe("h");
+    expect([...room.peers.keys()]).toEqual(["h"]);
     expect(room.code).toHaveLength(4);
-    expect(room.hostPeerId).toBe("p1");
-    expect([...room.peers.keys()]).toEqual(["p1"]);
-    expect(store.getRoom(room.code)).toBe(room);
-    expect(store.roomOf("p1")).toBe(room);
+    expect(store.size).toBe(1);
   });
 
-  it("generates unique room codes across many rooms", () => {
-    const store = new RoomStore();
-    const codes = new Set<string>();
-    for (let i = 0; i < 50; i += 1) {
-      const room = store.createRoom({
-        peerId: `p${i}`,
-        playerName: `n${i}`,
-        ws: mockSocket(),
-      });
-      expect(codes.has(room.code)).toBe(false);
-      codes.add(room.code);
-    }
-  });
-
-  it("joins an existing room and reports the existing peers", () => {
-    const store = new RoomStore();
-    const room = store.createRoom({ peerId: "p1", playerName: "alice", ws: mockSocket() });
-    const result = store.joinRoom(
-      room.code,
-      { peerId: "p2", playerName: "bob", ws: mockSocket() },
-      4,
-    );
-
+  it("joins a lobby room and reports existing peers", () => {
+    const store = makeStore();
+    const room = store.createRoom({ peerId: "h", playerName: "host" });
+    const result = store.joinRoom(room.code, { peerId: "g", playerName: "guest" });
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.existingPeers).toEqual([{ peerId: "p1", playerName: "alice" }]);
-      expect([...result.room.peers.keys()]).toEqual(["p1", "p2"]);
+      expect(result.existingPeers).toEqual([{ peerId: "h", playerName: "host", isHost: true }]);
+      expect([...result.room.peers.keys()]).toEqual(["h", "g"]);
     }
   });
 
-  it("returns ROOM_NOT_FOUND when joining a missing room", () => {
-    const store = new RoomStore();
-    const result = store.joinRoom("NOPE", { peerId: "p2", playerName: "bob", ws: mockSocket() }, 4);
-    expect(result).toEqual({ ok: false, errorCode: "ROOM_NOT_FOUND" });
+  it("refuses join on missing room", () => {
+    const store = makeStore();
+    expect(store.joinRoom("NOPE", { peerId: "g", playerName: "x" })).toEqual({
+      ok: false,
+      errorCode: "ROOM_NOT_FOUND",
+    });
   });
 
-  it("returns ROOM_FULL when the room has reached the cap", () => {
-    const store = new RoomStore();
-    const room = store.createRoom({ peerId: "p1", playerName: "a", ws: mockSocket() });
-    const joined = store.joinRoom(
-      room.code,
-      { peerId: "p2", playerName: "b", ws: mockSocket() },
-      2,
-    );
-    expect(joined.ok).toBe(true);
-
-    const result = store.joinRoom(
-      room.code,
-      { peerId: "p3", playerName: "c", ws: mockSocket() },
-      2,
-    );
-    expect(result).toEqual({ ok: false, errorCode: "ROOM_FULL" });
+  it("refuses join when room is full", () => {
+    const store = makeStore(2);
+    const room = store.createRoom({ peerId: "h", playerName: "host" });
+    expect(store.joinRoom(room.code, { peerId: "g1", playerName: "a" }).ok).toBe(true);
+    expect(store.joinRoom(room.code, { peerId: "g2", playerName: "b" })).toEqual({
+      ok: false,
+      errorCode: "ROOM_FULL",
+    });
   });
 
-  it("reports guest-left and keeps the room when a non-host leaves", () => {
-    const store = new RoomStore();
-    const room = store.createRoom({ peerId: "p1", playerName: "a", ws: mockSocket() });
-    store.joinRoom(room.code, { peerId: "p2", playerName: "b", ws: mockSocket() }, 4);
+  describe("startMatch", () => {
+    it("rejects NOT_HOST from non-host", () => {
+      const store = makeStore();
+      const room = store.createRoom({ peerId: "h", playerName: "host" });
+      store.joinRoom(room.code, { peerId: "g", playerName: "guest" });
+      expect(store.startMatch(room.code, "g")).toEqual({ ok: false, errorCode: "NOT_HOST" });
+    });
 
-    const result = store.removePeer("p2");
-    expect(result.outcome).toBe("guest-left");
-    if (result.outcome === "guest-left") {
-      expect(result.remainingPeers.map((p) => p.peerId)).toEqual(["p1"]);
-    }
-    expect(store.getRoom(room.code)).toBeDefined();
+    it("rejects EMPTY when only host present", () => {
+      const store = makeStore();
+      const room = store.createRoom({ peerId: "h", playerName: "host" });
+      expect(store.startMatch(room.code, "h")).toEqual({ ok: false, errorCode: "EMPTY" });
+    });
+
+    it("succeeds, transitions to playing, and clears the idle timer", () => {
+      const store = makeStore();
+      const fired = vi.fn();
+      store.setIdleHandler(fired);
+      const room = store.createRoom({ peerId: "h", playerName: "host" });
+      store.joinRoom(room.code, { peerId: "g", playerName: "guest" });
+      expect(store.startMatch(room.code, "h")).toEqual({ ok: true });
+      expect(room.status).toBe("playing");
+      expect(room.idleTimer).toBeNull();
+      vi.advanceTimersByTime(10_000);
+      expect(fired).not.toHaveBeenCalled();
+    });
+
+    it("rejects ALREADY_STARTED on second start", () => {
+      const store = makeStore();
+      const room = store.createRoom({ peerId: "h", playerName: "host" });
+      store.joinRoom(room.code, { peerId: "g", playerName: "guest" });
+      store.startMatch(room.code, "h");
+      expect(store.startMatch(room.code, "h")).toEqual({ ok: false, errorCode: "ALREADY_STARTED" });
+    });
   });
 
-  it("dissolves the room and reports remaining peers when host leaves", () => {
-    const store = new RoomStore();
-    const room = store.createRoom({ peerId: "p1", playerName: "a", ws: mockSocket() });
-    store.joinRoom(room.code, { peerId: "p2", playerName: "b", ws: mockSocket() }, 4);
+  describe("detachPeer", () => {
+    it("guest-left in lobby notifies remaining peers", () => {
+      const store = makeStore();
+      const room = store.createRoom({ peerId: "h", playerName: "host" });
+      store.joinRoom(room.code, { peerId: "g", playerName: "guest" });
+      const result = store.detachPeer("g");
+      expect(result.outcome).toBe("guest-left");
+      if (result.outcome === "guest-left") {
+        expect(result.remaining.map((p) => p.peerId)).toEqual(["h"]);
+      }
+      expect(store.size).toBe(1);
+    });
 
-    const result = store.removePeer("p1");
-    expect(result.outcome).toBe("host-left");
-    if (result.outcome === "host-left") {
-      expect(result.remainingPeers.map((p) => p.peerId)).toEqual(["p2"]);
-    }
-    expect(store.getRoom(room.code)).toBeUndefined();
+    it("host-left-lobby dissolves the room and reports remaining guests", () => {
+      const store = makeStore();
+      const room = store.createRoom({ peerId: "h", playerName: "host" });
+      store.joinRoom(room.code, { peerId: "g", playerName: "guest" });
+      const result = store.detachPeer("h");
+      expect(result.outcome).toBe("host-left-lobby");
+      if (result.outcome === "host-left-lobby") {
+        expect(result.remaining.map((p) => p.peerId)).toEqual(["g"]);
+      }
+      expect(store.size).toBe(0);
+    });
+
+    it("host-left-playing does not dissolve the room", () => {
+      const store = makeStore();
+      const room = store.createRoom({ peerId: "h", playerName: "host" });
+      store.joinRoom(room.code, { peerId: "g", playerName: "guest" });
+      store.startMatch(room.code, "h");
+      expect(store.detachPeer("h")).toEqual({ outcome: "host-left-playing" });
+      expect(store.size).toBe(1);
+    });
+
+    it("no-op for unknown peer", () => {
+      const store = makeStore();
+      expect(store.detachPeer("ghost")).toEqual({ outcome: "no-op" });
+    });
   });
 
-  it("empties the room when the last peer leaves", () => {
-    const store = new RoomStore();
-    const room = store.createRoom({ peerId: "p1", playerName: "a", ws: mockSocket() });
+  describe("closeRoom", () => {
+    it("host closes and returns members", () => {
+      const store = makeStore();
+      const room = store.createRoom({ peerId: "h", playerName: "host" });
+      store.joinRoom(room.code, { peerId: "g", playerName: "guest" });
+      const members = store.closeRoom(room.code, "h");
+      expect(members?.map((p) => p.peerId).sort()).toEqual(["g", "h"]);
+      expect(store.size).toBe(0);
+    });
 
-    const result = store.removePeer("p1");
-    expect(result).toEqual({ outcome: "room-empty" });
-    expect(store.getRoom(room.code)).toBeUndefined();
+    it("non-host cannot close", () => {
+      const store = makeStore();
+      const room = store.createRoom({ peerId: "h", playerName: "host" });
+      store.joinRoom(room.code, { peerId: "g", playerName: "guest" });
+      expect(store.closeRoom(room.code, "g")).toBeNull();
+      expect(store.size).toBe(1);
+    });
   });
 
-  it("returns not-in-room for an unknown peer", () => {
-    const store = new RoomStore();
-    expect(store.removePeer("ghost")).toEqual({ outcome: "not-in-room" });
+  it("fires idle handler after roomIdleMs in lobby", () => {
+    const store = makeStore(4, 1000);
+    const fired = vi.fn();
+    store.setIdleHandler(fired);
+    const room = store.createRoom({ peerId: "h", playerName: "host" });
+    vi.advanceTimersByTime(999);
+    expect(fired).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(fired).toHaveBeenCalledTimes(1);
+    expect(fired).toHaveBeenCalledWith(room.code);
   });
 });

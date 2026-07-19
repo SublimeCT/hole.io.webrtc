@@ -22,7 +22,7 @@ export class Feedback {
     oscillator.frequency.setValueAtTime(230, now);
     oscillator.frequency.exponentialRampToValueAtTime(84, now + 0.16);
     gain.gain.setValueAtTime(0.0001, now);
-    gain.gain.exponentialRampToValueAtTime(0.1, now + 0.014);
+    gain.gain.exponentialRampToValueAtTime(0.125, now + 0.014);
     gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.18);
     oscillator.connect(gain);
     gain.connect(context.destination);

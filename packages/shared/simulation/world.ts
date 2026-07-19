@@ -5,11 +5,12 @@ import {
   MAP_HALF_SIZE,
   PEDESTRIAN_SPEED,
   ROAD_CENTERS,
+  ROAD_WIDTH,
   SCENE_OBJECT_COUNT,
   SIDEWALK_WIDTH,
   VEHICLE_SPEED,
 } from "./constants";
-import { getPrefabDefinition } from "./prefabs";
+import { getPrefabDefinition, HIGHEST_BUILDING_PREFAB_ID, PREFAB_DEFINITIONS } from "./prefabs";
 import type {
   HoleState,
   Quaternion,
@@ -31,6 +32,20 @@ const VEHICLE_PREFABS = [
   "ambulance",
   "firetruck",
   "garbage-truck",
+  "vehicle-delivery-flat",
+  "vehicle-kart-oobi",
+  "vehicle-kart-oodi",
+  "vehicle-kart-ooli",
+  "vehicle-kart-oopi",
+  "vehicle-kart-oozi",
+  "vehicle-race",
+  "vehicle-race-future",
+  "vehicle-sedan-sports",
+  "vehicle-suv-luxury",
+  "vehicle-tractor",
+  "vehicle-tractor-police",
+  "vehicle-tractor-shovel",
+  "vehicle-truck-flat",
 ] as const;
 const BUILDING_PREFABS = [
   "building-a",
@@ -64,10 +79,17 @@ const COMMERCIAL_LANDMARK_PREFABS = [
   "commercial-building-f",
   "commercial-building-g",
   "commercial-building-h",
+  "commercial-building-i",
+  "commercial-building-j",
+  "commercial-building-k",
+  "commercial-building-l",
+  "commercial-building-m",
+  "commercial-building-n",
   "commercial-skyscraper-a",
   "commercial-skyscraper-b",
   "commercial-skyscraper-c",
   "commercial-skyscraper-d",
+  "commercial-skyscraper-e",
 ] as const;
 const COMMERCIAL_SHOP_PREFABS = [
   "commercial-low-a",
@@ -78,6 +100,14 @@ const COMMERCIAL_SHOP_PREFABS = [
   "commercial-low-f",
   "commercial-low-g",
   "commercial-low-h",
+  "commercial-low-i",
+  "commercial-low-j",
+  "commercial-low-k",
+  "commercial-low-l",
+  "commercial-low-m",
+  "commercial-low-n",
+  "commercial-low-wide-a",
+  "commercial-low-wide-b",
 ] as const;
 const ROUTE_LIMIT = MAP_HALF_SIZE - 8;
 const SIDEWALK_CENTER_OFFSET = 3.5 + SIDEWALK_WIDTH / 2;
@@ -100,6 +130,382 @@ interface OccupiedFootprint {
   radius: number;
 }
 
+type BlockPrefabSlot =
+  | "landmark"
+  | "shop"
+  | "house"
+  | "tree-small"
+  | "tree-large"
+  | "planter"
+  | "fence"
+  | "fence-low"
+  | "crate"
+  | "cone"
+  | "cone-flat"
+  | "debris-tire"
+  | "debris-bumper"
+  | "debris-plate"
+  | "debris-plate-small"
+  | "awning"
+  | "awning-wide"
+  | "overhang"
+  | "overhang-wide"
+  | "parasol-a"
+  | "parasol-b"
+  | "sedan"
+  | "hatchback"
+  | "suv"
+  | "path-long"
+  | "path-stones-long";
+
+export interface CityBlockPlacement {
+  prefab: BlockPrefabSlot;
+  offset: readonly [number, number];
+  yaw?: number;
+}
+
+type CityBlockPropOrder =
+  | "rows"
+  | "columns"
+  | "center-out"
+  | "edge-in"
+  | "checkerboard"
+  | "diagonal";
+
+export interface CityBlockLayout {
+  id: string;
+  label: string;
+  structures: readonly CityBlockPlacement[];
+  details: readonly CityBlockPlacement[];
+  smallProps: readonly BlockPrefabSlot[];
+  propOrder: CityBlockPropOrder;
+}
+
+const RETAIL_PLAZA_STRUCTURES = [
+  { prefab: "landmark", offset: [-11.5, -11.5] },
+  { prefab: "landmark", offset: [-11.5, 11.5] },
+  { prefab: "landmark", offset: [11.5, -11.5] },
+  { prefab: "landmark", offset: [11.5, 11.5] },
+  { prefab: "shop", offset: [0, -7] },
+  { prefab: "shop", offset: [7, 0] },
+  { prefab: "shop", offset: [0, 7] },
+  { prefab: "shop", offset: [-7, 0] },
+] as const satisfies readonly CityBlockPlacement[];
+
+const TOWER_COURT_STRUCTURES = [
+  { prefab: "landmark", offset: [-12, -11] },
+  { prefab: "landmark", offset: [12, -11] },
+  { prefab: "landmark", offset: [0, 12] },
+  { prefab: "shop", offset: [-8, 2] },
+  { prefab: "shop", offset: [0, 2] },
+  { prefab: "shop", offset: [8, 2] },
+  { prefab: "shop", offset: [-10, 10] },
+  { prefab: "shop", offset: [10, 10] },
+] as const satisfies readonly CityBlockPlacement[];
+
+const POCKET_PARK_STRUCTURES = [
+  { prefab: "house", offset: [-11.5, -11.5] },
+  { prefab: "house", offset: [-11.5, 11.5] },
+  { prefab: "house", offset: [11.5, -11.5] },
+  { prefab: "house", offset: [11.5, 11.5] },
+  { prefab: "shop", offset: [0, -7] },
+  { prefab: "shop", offset: [7, 0] },
+  { prefab: "shop", offset: [0, 7] },
+  { prefab: "shop", offset: [-7, 0] },
+] as const satisfies readonly CityBlockPlacement[];
+
+const SERVICE_YARD_STRUCTURES = [
+  { prefab: "landmark", offset: [-12, -10] },
+  { prefab: "landmark", offset: [-12, 10] },
+  { prefab: "shop", offset: [3, -10] },
+  { prefab: "shop", offset: [12, -10] },
+  { prefab: "shop", offset: [3, 0] },
+  { prefab: "shop", offset: [12, 0] },
+  { prefab: "shop", offset: [3, 10] },
+  { prefab: "shop", offset: [12, 10] },
+] as const satisfies readonly CityBlockPlacement[];
+
+const FENCED_HOUSING_STRUCTURES = [
+  { prefab: "house", offset: [-12, 0] },
+  { prefab: "house", offset: [0, -12] },
+  { prefab: "house", offset: [12, 0] },
+  { prefab: "house", offset: [0, 12] },
+  { prefab: "shop", offset: [-10, -10] },
+  { prefab: "shop", offset: [10, -10] },
+  { prefab: "shop", offset: [-10, 10] },
+  { prefab: "shop", offset: [10, 10] },
+] as const satisfies readonly CityBlockPlacement[];
+
+const MIXED_COURTYARD_STRUCTURES = [
+  { prefab: "landmark", offset: [-12, -12] },
+  { prefab: "house", offset: [-12, 12] },
+  { prefab: "house", offset: [12, -12] },
+  { prefab: "landmark", offset: [12, 12] },
+  { prefab: "shop", offset: [0, -7] },
+  { prefab: "shop", offset: [7, 0] },
+  { prefab: "shop", offset: [0, 7] },
+  { prefab: "shop", offset: [-7, 0] },
+] as const satisfies readonly CityBlockPlacement[];
+
+const AUTO_FORECOURT_STRUCTURES = [
+  { prefab: "landmark", offset: [-12, -11] },
+  { prefab: "landmark", offset: [12, -11] },
+  { prefab: "shop", offset: [-12, 11] },
+  { prefab: "shop", offset: [0, 11] },
+  { prefab: "shop", offset: [12, 11] },
+  { prefab: "shop", offset: [-8, 0] },
+  { prefab: "shop", offset: [0, 0] },
+  { prefab: "shop", offset: [8, 0] },
+] as const satisfies readonly CityBlockPlacement[];
+
+const GARDEN_ARCADE_STRUCTURES = [
+  { prefab: "house", offset: [-12, 0] },
+  { prefab: "house", offset: [0, -12] },
+  { prefab: "house", offset: [12, 0] },
+  { prefab: "house", offset: [0, 12] },
+  { prefab: "shop", offset: [-10, -10] },
+  { prefab: "shop", offset: [10, -10] },
+  { prefab: "shop", offset: [-10, 10] },
+  { prefab: "shop", offset: [10, 10] },
+] as const satisfies readonly CityBlockPlacement[];
+
+const LINEAR_MARKET_STRUCTURES = [
+  { prefab: "landmark", offset: [-12, 0] },
+  { prefab: "landmark", offset: [12, 0] },
+  { prefab: "shop", offset: [-8, -10] },
+  { prefab: "shop", offset: [0, -10] },
+  { prefab: "shop", offset: [8, -10] },
+  { prefab: "shop", offset: [-8, 10] },
+  { prefab: "shop", offset: [0, 10] },
+  { prefab: "shop", offset: [8, 10] },
+] as const satisfies readonly CityBlockPlacement[];
+
+const CIVIC_SQUARE_STRUCTURES = [
+  { prefab: "landmark", offset: [-11.5, -11.5] },
+  { prefab: "landmark", offset: [-11.5, 11.5] },
+  { prefab: "landmark", offset: [11.5, -11.5] },
+  { prefab: "landmark", offset: [11.5, 11.5] },
+  { prefab: "shop", offset: [0, -7] },
+  { prefab: "shop", offset: [7, 0] },
+  { prefab: "shop", offset: [0, 7] },
+  { prefab: "shop", offset: [-7, 0] },
+] as const satisfies readonly CityBlockPlacement[];
+
+export const CITY_BLOCK_LAYOUTS = [
+  {
+    id: "retail-plaza",
+    label: "Retail plaza",
+    structures: RETAIL_PLAZA_STRUCTURES,
+    details: [
+      { prefab: "tree-small", offset: [0, -14] },
+      { prefab: "tree-small", offset: [14, 0] },
+      { prefab: "tree-small", offset: [0, 14] },
+      { prefab: "tree-small", offset: [-14, 0] },
+      { prefab: "awning-wide", offset: [0, -1] },
+    ],
+    smallProps: ["planter", "crate", "debris-plate", "cone", "cone-flat", "parasol-a", "parasol-b"],
+    propOrder: "rows",
+  },
+  {
+    id: "tower-court",
+    label: "Tower court",
+    structures: TOWER_COURT_STRUCTURES,
+    details: [
+      { prefab: "tree-large", offset: [-15, 0] },
+      { prefab: "tree-large", offset: [15, 0] },
+      { prefab: "planter", offset: [0, -4] },
+      { prefab: "awning", offset: [-4, 6] },
+      { prefab: "awning", offset: [4, 6] },
+    ],
+    smallProps: [
+      "planter",
+      "crate",
+      "debris-plate",
+      "debris-plate-small",
+      "cone",
+      "cone-flat",
+      "debris-tire",
+    ],
+    propOrder: "columns",
+  },
+  {
+    id: "pocket-park",
+    label: "Pocket park",
+    structures: POCKET_PARK_STRUCTURES,
+    details: [
+      { prefab: "tree-large", offset: [0, 0] },
+      { prefab: "tree-small", offset: [-5, 0] },
+      { prefab: "tree-small", offset: [5, 0] },
+      { prefab: "tree-small", offset: [0, -5] },
+      { prefab: "tree-small", offset: [0, 5] },
+    ],
+    smallProps: [
+      "planter",
+      "crate",
+      "debris-plate",
+      "debris-plate-small",
+      "cone",
+      "parasol-a",
+      "parasol-b",
+    ],
+    propOrder: "center-out",
+  },
+  {
+    id: "service-yard",
+    label: "Service yard",
+    structures: SERVICE_YARD_STRUCTURES,
+    details: [
+      { prefab: "fence", offset: [-4, -3], yaw: Math.PI / 2 },
+      { prefab: "fence", offset: [-4, 3], yaw: Math.PI / 2 },
+      { prefab: "crate", offset: [-1, -5] },
+      { prefab: "debris-tire", offset: [-1, 0] },
+      { prefab: "debris-bumper", offset: [-1, 5] },
+    ],
+    smallProps: [
+      "planter",
+      "crate",
+      "debris-plate",
+      "debris-plate-small",
+      "cone",
+      "cone-flat",
+      "debris-bumper",
+    ],
+    propOrder: "edge-in",
+  },
+  {
+    id: "fenced-housing",
+    label: "Fenced housing",
+    structures: FENCED_HOUSING_STRUCTURES,
+    details: [
+      { prefab: "fence-low", offset: [-3, -4] },
+      { prefab: "fence-low", offset: [3, -4] },
+      { prefab: "fence-low", offset: [-3, 4] },
+      { prefab: "fence-low", offset: [3, 4] },
+      { prefab: "tree-large", offset: [0, 0] },
+    ],
+    smallProps: [
+      "planter",
+      "crate",
+      "debris-plate",
+      "debris-plate-small",
+      "cone",
+      "cone-flat",
+      "debris-tire",
+    ],
+    propOrder: "checkerboard",
+  },
+  {
+    id: "mixed-courtyard",
+    label: "Mixed courtyard",
+    structures: MIXED_COURTYARD_STRUCTURES,
+    details: [
+      { prefab: "tree-small", offset: [-14, 0] },
+      { prefab: "tree-small", offset: [14, 0] },
+      { prefab: "overhang-wide", offset: [0, -1] },
+      { prefab: "parasol-a", offset: [-3, 3] },
+      { prefab: "parasol-b", offset: [3, 3] },
+    ],
+    smallProps: [
+      "planter",
+      "crate",
+      "debris-plate",
+      "debris-plate-small",
+      "cone",
+      "cone-flat",
+      "debris-bumper",
+    ],
+    propOrder: "diagonal",
+  },
+  {
+    id: "auto-forecourt",
+    label: "Auto forecourt",
+    structures: AUTO_FORECOURT_STRUCTURES,
+    details: [
+      { prefab: "sedan", offset: [-14, 5] },
+      { prefab: "suv", offset: [14, 5] },
+      { prefab: "cone", offset: [-4, -5] },
+      { prefab: "cone", offset: [4, -5] },
+      { prefab: "debris-bumper", offset: [0, -5] },
+    ],
+    smallProps: [
+      "planter",
+      "crate",
+      "debris-plate",
+      "debris-plate-small",
+      "cone",
+      "cone-flat",
+      "debris-tire",
+    ],
+    propOrder: "columns",
+  },
+  {
+    id: "garden-arcade",
+    label: "Garden arcade",
+    structures: GARDEN_ARCADE_STRUCTURES,
+    details: [
+      { prefab: "path-stones-long", offset: [0, 0] },
+      { prefab: "tree-small", offset: [-6, 0] },
+      { prefab: "tree-small", offset: [6, 0] },
+      { prefab: "parasol-a", offset: [-5, 5] },
+      { prefab: "parasol-b", offset: [5, 5] },
+    ],
+    smallProps: [
+      "planter",
+      "crate",
+      "debris-plate",
+      "debris-plate-small",
+      "cone",
+      "parasol-a",
+      "parasol-b",
+    ],
+    propOrder: "center-out",
+  },
+  {
+    id: "linear-market",
+    label: "Linear market",
+    structures: LINEAR_MARKET_STRUCTURES,
+    details: [
+      { prefab: "parasol-a", offset: [-4, 0] },
+      { prefab: "parasol-b", offset: [4, 0] },
+      { prefab: "awning-wide", offset: [0, -3] },
+      { prefab: "awning-wide", offset: [0, 3] },
+      { prefab: "tree-small", offset: [0, 0] },
+    ],
+    smallProps: [
+      "planter",
+      "crate",
+      "debris-plate",
+      "debris-plate-small",
+      "cone",
+      "cone-flat",
+      "debris-bumper",
+    ],
+    propOrder: "rows",
+  },
+  {
+    id: "civic-square",
+    label: "Civic square",
+    structures: CIVIC_SQUARE_STRUCTURES,
+    details: [
+      { prefab: "tree-large", offset: [0, 0] },
+      { prefab: "planter", offset: [-5, -5] },
+      { prefab: "planter", offset: [5, -5] },
+      { prefab: "planter", offset: [-5, 5] },
+      { prefab: "planter", offset: [5, 5] },
+    ],
+    smallProps: [
+      "planter",
+      "crate",
+      "debris-plate",
+      "debris-plate-small",
+      "cone",
+      "parasol-a",
+      "parasol-b",
+    ],
+    propOrder: "edge-in",
+  },
+] as const satisfies readonly CityBlockLayout[];
+
 function rotationFromYaw(yaw: number): Quaternion {
   return { x: 0, y: Math.sin(yaw / 2), z: 0, w: Math.cos(yaw / 2) };
 }
@@ -113,11 +519,18 @@ function fitDiameterFor(size: Vector2, height: number, shape: WorldObjectState["
 }
 
 function scoreFor(prefabId: string, size: Vector2, stackLayers: number): number {
+  const isBuilding = prefabId.startsWith("building-") || prefabId.startsWith("commercial-");
+  if (isBuilding) {
+    return prefabId === HIGHEST_BUILDING_PREFAB_ID ? 50 : 40;
+  }
+  if (
+    prefabId.startsWith("vehicle-") ||
+    VEHICLE_PREFABS.includes(prefabId as (typeof VEHICLE_PREFABS)[number])
+  ) {
+    return 30;
+  }
   const contactArea = size.x * size.y;
-  const buildingMultiplier =
-    prefabId.startsWith("building-") || prefabId.startsWith("commercial-") ? 8 : 1;
-  const cap = buildingMultiplier === 8 ? 50 : 30;
-  return Math.min(cap, Math.max(1, Math.round(contactArea * 4) * buildingMultiplier * stackLayers));
+  return Math.min(30, Math.max(1, Math.round(contactArea * 4) * stackLayers));
 }
 
 function createObject(
@@ -216,6 +629,94 @@ function createLandIntervals(): readonly LandInterval[] {
   return intervals;
 }
 
+function prefabForBlockSlot(slot: BlockPrefabSlot, placementIndex: number): string {
+  switch (slot) {
+    case "landmark":
+      return (
+        COMMERCIAL_LANDMARK_PREFABS[placementIndex % COMMERCIAL_LANDMARK_PREFABS.length] ??
+        "commercial-building-a"
+      );
+    case "shop":
+      return (
+        COMMERCIAL_SHOP_PREFABS[placementIndex % COMMERCIAL_SHOP_PREFABS.length] ??
+        "commercial-low-a"
+      );
+    case "house":
+      return BUILDING_PREFABS[placementIndex % BUILDING_PREFABS.length] ?? "building-a";
+    default:
+      return slot;
+  }
+}
+
+function addBlockPlacements(
+  add: (prefabId: string, position: Vector2, yaw?: number) => void,
+  canPlace: (prefabId: string, position: Vector2) => boolean,
+  centerX: number,
+  centerY: number,
+  blockIndex: number,
+  placements: readonly CityBlockPlacement[],
+): void {
+  placements.forEach((placement, placementIndex) => {
+    const prefabId = prefabForBlockSlot(placement.prefab, blockIndex * 17 + placementIndex);
+    const position = {
+      x: centerX + placement.offset[0],
+      y: centerY + placement.offset[1],
+    };
+    if (canPlace(prefabId, position)) {
+      add(prefabId, position, placement.yaw ?? 0);
+    }
+  });
+}
+
+function smallPropCandidates(
+  centerX: number,
+  centerY: number,
+  blockIndex: number,
+  propOrder: CityBlockPropOrder,
+): Vector2[] {
+  const phase = (blockIndex % 7) * 0.11;
+  const candidates: Vector2[] = [];
+  for (let offsetY = -15; offsetY <= 15; offsetY += 1.72) {
+    for (let offsetX = -15; offsetX <= 15; offsetX += 1.72) {
+      candidates.push({ x: centerX + offsetX + phase, y: centerY + offsetY - phase });
+    }
+  }
+  if (propOrder === "columns") {
+    return [...candidates].sort((left, right) =>
+      left.x === right.x ? left.y - right.y : left.x - right.x,
+    );
+  }
+  if (propOrder === "center-out") {
+    return [...candidates].sort(
+      (left, right) =>
+        Math.hypot(left.x - centerX, left.y - centerY) -
+        Math.hypot(right.x - centerX, right.y - centerY),
+    );
+  }
+  if (propOrder === "edge-in") {
+    return [...candidates].sort(
+      (left, right) =>
+        Math.max(Math.abs(right.x - centerX), Math.abs(right.y - centerY)) -
+        Math.max(Math.abs(left.x - centerX), Math.abs(left.y - centerY)),
+    );
+  }
+  if (propOrder === "checkerboard") {
+    return [...candidates].sort((left, right) => {
+      const leftParity = Math.round((left.x + left.y) / 1.72) & 1;
+      const rightParity = Math.round((right.x + right.y) / 1.72) & 1;
+      return leftParity - rightParity;
+    });
+  }
+  if (propOrder === "diagonal") {
+    return [...candidates].sort((left, right) => {
+      const leftDiagonal = left.x - centerX + (left.y - centerY);
+      const rightDiagonal = right.x - centerX + (right.y - centerY);
+      return leftDiagonal === rightDiagonal ? left.x - right.x : leftDiagonal - rightDiagonal;
+    });
+  }
+  return candidates;
+}
+
 function addLargeBlock(
   add: (prefabId: string, position: Vector2, yaw?: number) => void,
   canPlace: (prefabId: string, position: Vector2) => boolean,
@@ -224,37 +725,12 @@ function addLargeBlock(
   blockIndex: number,
   includeCentralBuilding: boolean,
 ): void {
-  const layout = blockIndex % 6;
-  const landmarks = [
-    [-11.5, -11.5],
-    [-11.5, 11.5],
-    [11.5, -11.5],
-    [11.5, 11.5],
-  ] as const;
-  const shops = [
-    [0, -7],
-    [7, 0],
-    [0, 7],
-    [-7, 0],
-  ] as const;
-  landmarks.forEach(([offsetX, offsetY], localIndex) => {
-    add(
-      COMMERCIAL_LANDMARK_PREFABS[
-        (blockIndex * 4 + localIndex) % COMMERCIAL_LANDMARK_PREFABS.length
-      ] ?? "commercial-building-a",
-      { x: centerX + offsetX, y: centerY + offsetY },
-    );
-  });
-
-  shops.forEach(([offsetX, offsetY], shopIndex) => {
-    const prefabId =
-      COMMERCIAL_SHOP_PREFABS[(blockIndex * 4 + shopIndex) % COMMERCIAL_SHOP_PREFABS.length] ??
-      "commercial-low-a";
-    const position = { x: centerX + offsetX, y: centerY + offsetY };
-    if (canPlace(prefabId, position)) {
-      add(prefabId, position);
-    }
-  });
+  const layout = CITY_BLOCK_LAYOUTS[blockIndex % CITY_BLOCK_LAYOUTS.length];
+  if (!layout) {
+    throw new Error(`Missing city block layout: ${blockIndex}`);
+  }
+  addBlockPlacements(add, canPlace, centerX, centerY, blockIndex, layout.structures);
+  addBlockPlacements(add, canPlace, centerX, centerY, blockIndex + 29, layout.details);
 
   if (includeCentralBuilding) {
     const prefabId =
@@ -264,101 +740,15 @@ function addLargeBlock(
     if (canPlace(prefabId, center)) {
       add(prefabId, center);
     }
+  }
+
+  if (includeCentralBuilding) {
     return;
   }
 
-  const landscapeByLayout = [
-    [
-      [0, -14],
-      [14, 0],
-      [0, 14],
-      [-14, 0],
-    ],
-    [
-      [0, -14],
-      [0, 14],
-      [-14, 0],
-      [14, 0],
-    ],
-    [
-      [-14, -14],
-      [14, 14],
-      [-14, 14],
-      [14, -14],
-    ],
-    [
-      [0, -14],
-      [-14, 0],
-      [14, 0],
-      [0, 14],
-    ],
-    [
-      [-14, -14],
-      [-14, 14],
-      [14, -14],
-      [14, 14],
-    ],
-    [
-      [0, -14],
-      [-14, 0],
-      [0, 14],
-      [14, 0],
-    ],
-  ] as const;
-  const landscape = landscapeByLayout[layout];
-  if (!landscape) {
-    throw new Error(`Missing city block layout: ${layout}`);
-  }
-  landscape.forEach(([offsetX, offsetY]) => {
-    const position = { x: centerX + offsetX, y: centerY + offsetY };
-    if (canPlace("tree-small", position)) {
-      add("tree-small", position);
-    }
-  });
-  const featurePrefabs = [
-    "tree-large",
-    "fence",
-    "fence-low",
-    "cone",
-    "cone-flat",
-    "debris-tire",
-    "debris-bumper",
-  ] as const;
-  const featurePositions = [
-    [-14, -3],
-    [-14, 3],
-    [14, -3],
-    [14, 3],
-    [-3, -14],
-    [3, -14],
-    [0, 14],
-  ] as const;
-  const featurePrefab = featurePrefabs[layout];
-  const featurePosition = featurePositions[layout];
-  if (featurePrefab && featurePosition) {
-    const position = { x: centerX + featurePosition[0], y: centerY + featurePosition[1] };
-    if (canPlace(featurePrefab, position)) {
-      add(featurePrefab, position, featurePrefab.startsWith("fence") ? Math.PI / 2 : 0);
-    }
-  }
-
-  const candidates: Vector2[] = [];
-  const phase = (blockIndex % 7) * 0.11;
-  for (let offsetY = -15; offsetY <= 15; offsetY += 1.72) {
-    for (let offsetX = -15; offsetX <= 15; offsetX += 1.72) {
-      candidates.push({ x: centerX + offsetX + phase, y: centerY + offsetY - phase });
-    }
-  }
-  const smallPrefabs = [
-    "planter",
-    "crate",
-    blockIndex % 2 === 0 ? "debris-plate" : "debris-plate-small",
-    "cone",
-    "cone-flat",
-    "debris-tire",
-    "debris-bumper",
-  ] as const;
-  for (const prefabId of smallPrefabs) {
+  const candidates = smallPropCandidates(centerX, centerY, blockIndex, layout.propOrder);
+  for (const slot of layout.smallProps) {
+    const prefabId = prefabForBlockSlot(slot, blockIndex);
     let placed = 0;
     for (const position of candidates) {
       if (placed === 4 * SMALL_PROP_MULTIPLIER) {
@@ -411,6 +801,57 @@ function nextRandom(state: number): readonly [number, number] {
   next ^= next >>> 17;
   next ^= next << 5;
   return [(next >>> 0) / 4_294_967_296, next >>> 0];
+}
+
+function ensureAllPrefabsArePlaced(
+  objects: readonly WorldObjectState[],
+  add: (prefabId: string, position: Vector2, yaw?: number) => void,
+  canPlace: (prefabId: string, position: Vector2) => boolean,
+): void {
+  const placedIds = new Set(objects.map((object) => object.prefabId));
+  const missing = PREFAB_DEFINITIONS.filter((definition) => !placedIds.has(definition.id));
+  if (missing.length === 0) {
+    return;
+  }
+
+  const candidates: Vector2[] = [];
+  for (let y = -MAP_HALF_SIZE + 4; y <= MAP_HALF_SIZE - 4; y += 3.5) {
+    for (let x = -MAP_HALF_SIZE + 4; x <= MAP_HALF_SIZE - 4; x += 3.5) {
+      candidates.push({ x, y });
+    }
+  }
+  let candidateOffset = 0;
+  for (const definition of missing) {
+    let placed = false;
+    const requiredRadius = footprintRadius(definition.id);
+    for (let attempt = 0; attempt < candidates.length; attempt += 1) {
+      const candidate = candidates[(candidateOffset + attempt) % candidates.length];
+      if (!candidate) {
+        continue;
+      }
+      const intersectsRoadRoute = ROAD_CENTERS.some(
+        (center) =>
+          Math.abs(candidate.x - center) < requiredRadius + ROAD_WIDTH / 2 + 1 ||
+          Math.abs(candidate.y - center) < requiredRadius + ROAD_WIDTH / 2 + 1,
+      );
+      const blocksCandidate = objects.some(
+        (object) =>
+          (object.motion !== null || object.prefabId.startsWith("character-")) &&
+          Math.hypot(object.position.x - candidate.x, object.position.y - candidate.y) <
+            footprintRadius(object.prefabId) + requiredRadius + 0.04,
+      );
+      if (intersectsRoadRoute || blocksCandidate || !canPlace(definition.id, candidate)) {
+        continue;
+      }
+      add(definition.id, candidate, ((candidateOffset + attempt) % 4) * (Math.PI / 2));
+      candidateOffset += attempt + 1;
+      placed = true;
+      break;
+    }
+    if (!placed) {
+      throw new Error(`Unable to place required prefab: ${definition.id}`);
+    }
+  }
 }
 
 function buildCityObjects(seed: number): readonly WorldObjectState[] {
@@ -602,11 +1043,15 @@ function buildCityObjects(seed: number): readonly WorldObjectState[] {
     });
   });
 
+  const towerEligibleObjectCount = objects.length;
+  ensureAllPrefabsArePlaced(objects, add, canPlace);
+
   const buildingIndices = objects
     .map((object, index) => ({ object, index }))
     .filter(
-      ({ object }) =>
-        object.prefabId.startsWith("building-") || object.prefabId.startsWith("commercial-"),
+      ({ object, index }) =>
+        index < towerEligibleObjectCount &&
+        (object.prefabId.startsWith("building-") || object.prefabId.startsWith("commercial-")),
     );
   let stackRng = seed >>> 0;
   const stackCount = (BOT_COUNT + 1) * 3;
@@ -648,7 +1093,7 @@ function buildCityObjects(seed: number): readonly WorldObjectState[] {
       );
       objects.push({
         ...tier,
-        centerY: object.height * (layer + 0.5),
+        centerY: object.height * (layer + 0.5) + layer * 0.0001,
       });
     }
   }
@@ -748,6 +1193,12 @@ function createHoles(
       eliminations: 0,
       revivesRemaining: 1,
       invulnerabilityRemaining: 0,
+      speedBoostRemaining: 0,
+      speedBoostCooldown: 0,
+      radiusBoostRemaining: 0,
+      radiusBoostCooldown: 0,
+      bombFuseRemaining: 0,
+      bombCooldown: 0,
       isOut: false,
       bot:
         index === 0

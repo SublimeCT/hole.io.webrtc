@@ -8,6 +8,7 @@ import {
   getHoleProgress,
   stepSimulation,
   type HoleState,
+  type AbilityId,
   type SimulationEvent,
   type SimulationState,
 } from "@hole-io/shared/simulation";
@@ -28,6 +29,9 @@ interface HoleVisual {
   depth: THREE.Mesh;
   ringMaterials: readonly [THREE.MeshBasicMaterial];
   progressValue: number;
+  speedRing: THREE.Mesh;
+  radiusRing: THREE.Mesh;
+  bombRing: THREE.Mesh;
 }
 
 export interface GamePreferences {
@@ -59,6 +63,14 @@ export interface GameUi {
   startMatch: HTMLButtonElement;
   scoreEffects: HTMLElement;
   opponentIndicators: readonly [OpponentIndicatorUi, OpponentIndicatorUi];
+  abilityButtons: readonly [AbilityButtonUi, AbilityButtonUi, AbilityButtonUi];
+  abilityFeedback: HTMLElement;
+}
+
+export interface AbilityButtonUi {
+  root: HTMLButtonElement;
+  cooldown: HTMLElement;
+  status: HTMLElement;
 }
 
 export interface RankingRowUi {
@@ -103,6 +115,9 @@ export class Game {
   #pageVisible = document.visibilityState !== "hidden";
   #sceneDirty = true;
   #preferences: GamePreferences;
+  readonly #pendingAbilities = new Set<AbilityId>();
+  #abilityFeedbackTimer: number | null = null;
+  #lastBombFuseRemaining = 0;
 
   private constructor(
     canvas: HTMLCanvasElement,
@@ -138,6 +153,9 @@ export class Game {
     ui.returnHomeMatch.addEventListener("click", this.#returnHome);
     ui.returnHomeResults.addEventListener("click", this.#returnHome);
     ui.startMatch.addEventListener("click", this.#startMatch);
+    ui.abilityButtons[0].root.addEventListener("click", () => this.#requestAbility("speed"));
+    ui.abilityButtons[1].root.addEventListener("click", () => this.#requestAbility("radius"));
+    ui.abilityButtons[2].root.addEventListener("click", () => this.#requestAbility("bomb"));
     document.addEventListener("visibilitychange", this.#onVisibilityChange);
   }
 
@@ -168,6 +186,9 @@ export class Game {
 
   dispose(): void {
     this.#renderer.setAnimationLoop(null);
+    if (this.#abilityFeedbackTimer !== null) {
+      window.clearTimeout(this.#abilityFeedbackTimer);
+    }
     window.removeEventListener("resize", this.#resize);
     window.removeEventListener("keydown", this.#onShortcut);
     this.#ui.restart.removeEventListener("click", this.#restart);
@@ -206,9 +227,16 @@ export class Game {
     while (this.#matchStarted && this.#accumulator >= FIXED_STEP_SECONDS) {
       const result = stepSimulation(
         this.#state,
-        [{ playerId: "player", direction: this.#input.getDirection() }],
+        [
+          {
+            playerId: "player",
+            direction: this.#input.getDirection(),
+            abilities: [...this.#pendingAbilities],
+          },
+        ],
         FIXED_STEP_SECONDS,
       );
+      this.#pendingAbilities.clear();
       this.#state = result.state;
       result.events.forEach((event) => this.#handleEvent(event));
       this.#accumulator -= FIXED_STEP_SECONDS;
@@ -330,6 +358,30 @@ export class Game {
     progressMesh.renderOrder = 4;
     group.add(progressMesh);
 
+    const createAbilityRing = (color: number, inner: number, outer: number): THREE.Mesh => {
+      const geometry = new THREE.RingGeometry(inner, outer, 96);
+      const material = new THREE.MeshBasicMaterial({
+        color,
+        transparent: true,
+        opacity: 0.9,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+        depthTest: false,
+      });
+      const ring = new THREE.Mesh(geometry, material);
+      ring.rotation.x = -Math.PI / 2;
+      ring.position.y = 0.012;
+      ring.visible = false;
+      ring.renderOrder = 5;
+      group.add(ring);
+      this.#geometries.add(geometry);
+      this.#materials.add(material);
+      return ring;
+    };
+    const speedRing = createAbilityRing(0x7ce7ff, 1.28, 1.34);
+    const radiusRing = createAbilityRing(0xc5a7ff, 1.4, 1.47);
+    const bombRing = createAbilityRing(0xff5b57, 1.52, 1.62);
+
     [maskGeometry, shaftGeometry, depthGeometry, progressGeometry].forEach((geometry) =>
       this.#geometries.add(geometry),
     );
@@ -346,6 +398,9 @@ export class Game {
       depth,
       ringMaterials: [progressMaterial],
       progressValue: -1,
+      speedRing,
+      radiusRing,
+      bombRing,
     };
   }
 
@@ -529,6 +584,13 @@ export class Game {
       visual.ringMaterials[0].opacity = hole.invulnerabilityRemaining > 0 ? 1 : 0.9;
       visual.group.position.set(hole.position.x, 0, hole.position.y);
       visual.group.scale.set(hole.radius, 1, hole.radius);
+      const isPlayer = hole.id === "player";
+      visual.speedRing.visible = isPlayer && hole.speedBoostRemaining > 0;
+      visual.radiusRing.visible = isPlayer && hole.radiusBoostRemaining > 0;
+      visual.bombRing.visible = isPlayer && hole.bombFuseRemaining > 0;
+      visual.speedRing.scale.setScalar(1.08 + Math.sin(this.#state.elapsed * 12) * 0.035);
+      visual.radiusRing.scale.setScalar(1.2 + Math.sin(this.#state.elapsed * 7) * 0.05);
+      visual.bombRing.scale.setScalar(1.15 + Math.sin(this.#state.elapsed * 18) * 0.1);
       visual.crown.visible = leader?.id === hole.id;
       visual.crown.position.y = 0.75 + hole.radius * 0.18;
       visual.crown.scale.set(0.95, 0.95 * hole.radius, 0.95);
@@ -640,6 +702,7 @@ export class Game {
     this.#ui.growthCopy.textContent = progress.nextScore
       ? `${progress.nextScore - player.score} TO NEXT SIZE`
       : "MAX SIZE";
+    this.#updateAbilityHud(player);
     const totalSeconds = Math.ceil(this.#state.remaining);
     const minutes = Math.floor(totalSeconds / 60);
     const seconds = totalSeconds % 60;
@@ -661,6 +724,43 @@ export class Game {
       this.#ui.finalScore.textContent = player.score.toString().padStart(5, "0");
       this.#ui.gameOver.hidden = false;
     }
+  }
+
+  #updateAbilityHud(player: HoleState): void {
+    if (
+      this.#lastBombFuseRemaining > 0 &&
+      player.bombFuseRemaining === 0 &&
+      player.bombCooldown > 0
+    ) {
+      this.#showAbilityFeedback("IMPACT DETONATED", "bomb", 1_600);
+    }
+    this.#lastBombFuseRemaining = player.bombFuseRemaining;
+    const abilities: readonly [AbilityId, number, number, number, string][] = [
+      ["speed", player.speedBoostRemaining, player.speedBoostCooldown, 20, "READY"],
+      ["radius", player.radiusBoostRemaining, player.radiusBoostCooldown, 60, "READY"],
+      ["bomb", player.bombFuseRemaining, player.bombCooldown, 120, "READY"],
+    ];
+    this.#ui.abilityButtons.forEach((button, index) => {
+      const entry = abilities[index];
+      if (!entry) return;
+      const [, active, cooldown, maxCooldown, readyCopy] = entry;
+      const locked = active > 0 || cooldown > 0;
+      button.root.disabled = locked;
+      button.root.classList.toggle("is-active", active > 0);
+      button.root.classList.toggle("is-cooldown", locked && active <= 0);
+      const progress = cooldown / maxCooldown;
+      button.root.style.setProperty("--ability-progress", `${Math.max(0, Math.min(1, progress))}`);
+      button.cooldown.textContent =
+        active > 0 ? `${active.toFixed(1)}s` : cooldown > 0 ? `${Math.ceil(cooldown)}s` : "";
+      button.status.textContent =
+        active > 0
+          ? entry[0] === "bomb"
+            ? "FUSE"
+            : "ACTIVE"
+          : cooldown > 0
+            ? "RECHARGE"
+            : readyCopy;
+    });
   }
 
   #writeRankingRows(
@@ -731,6 +831,8 @@ export class Game {
   #resetSimulation(): void {
     const spawnSeed = (crypto.getRandomValues(new Uint32Array(1))[0] ?? Date.now()) >>> 0;
     this.#state = createInitialSimulation(0x5eed1234, spawnSeed);
+    this.#pendingAbilities.clear();
+    this.#lastBombFuseRemaining = 0;
     this.#accumulator = 0;
     this.#hudAccumulator = 0;
     this.#ui.scoreEffects.replaceChildren();
@@ -752,11 +854,63 @@ export class Game {
     if (document.querySelector(".dialog-layer:not([hidden])")) {
       return;
     }
+    const abilityByCode: Partial<Record<string, AbilityId>> = {
+      KeyQ: "speed",
+      KeyE: "radius",
+      KeyR: "bomb",
+    };
+    const ability = abilityByCode[event.code];
+    if (ability && this.#matchStarted && !event.repeat) {
+      event.preventDefault();
+      this.#requestAbility(ability);
+      return;
+    }
     if (this.#state.status === "finished" && event.code === "KeyR") {
       event.preventDefault();
       this.#restart();
     }
   };
+
+  #requestAbility(ability: AbilityId): void {
+    if (!this.#matchStarted) return;
+    const player = this.#state.holes.find((hole) => hole.id === "player");
+    if (!player || player.eliminationRemaining > 0 || player.isOut) return;
+    const active =
+      ability === "speed"
+        ? player.speedBoostRemaining
+        : ability === "radius"
+          ? player.radiusBoostRemaining
+          : player.bombFuseRemaining;
+    const cooldown =
+      ability === "speed"
+        ? player.speedBoostCooldown
+        : ability === "radius"
+          ? player.radiusBoostCooldown
+          : player.bombCooldown;
+    if (active > 0 || cooldown > 0) return;
+    this.#pendingAbilities.add(ability);
+    const label =
+      ability === "speed"
+        ? "BOOST ONLINE"
+        : ability === "radius"
+          ? "VORTEX EXPANDED"
+          : "BOMB ARMED · 3 SEC";
+    this.#showAbilityFeedback(label, ability, ability === "bomb" ? 3_000 : 1_400);
+  }
+
+  #showAbilityFeedback(message: string, ability: AbilityId, duration: number): void {
+    this.#ui.abilityFeedback.textContent = message;
+    this.#ui.abilityFeedback.dataset.ability = ability;
+    this.#ui.abilityFeedback.classList.remove("is-visible");
+    requestAnimationFrame(() => this.#ui.abilityFeedback.classList.add("is-visible"));
+    if (this.#abilityFeedbackTimer !== null) {
+      window.clearTimeout(this.#abilityFeedbackTimer);
+    }
+    this.#abilityFeedbackTimer = window.setTimeout(() => {
+      this.#ui.abilityFeedback.classList.remove("is-visible");
+      this.#abilityFeedbackTimer = null;
+    }, duration);
+  }
 
   readonly #onVisibilityChange = (): void => {
     this.#pageVisible = document.visibilityState !== "hidden";

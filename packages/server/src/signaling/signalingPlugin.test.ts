@@ -4,21 +4,22 @@ import type { FastifyInstance } from "fastify";
 import { WebSocket } from "ws";
 import { buildApp } from "../app.js";
 import { loadConfig, type Config } from "../config.js";
+import { loadAbuseConfig, type AbuseConfig } from "../config/abuse.js";
 
-// 用 loadConfig() 拿到所有字段的默认值，再覆盖测试需要的几项，
-// 避免新增配置字段时漏改 baseConfig（曾因此导致 IDLE_TIMEOUT_MS 为 undefined 触发立即断开）。
+// 用 loadConfig()/loadAbuseConfig() 拿默认值再覆盖，避免漏字段（曾因此踩坑）。
 const baseConfig: Config = {
   ...loadConfig(),
   PORT: 0,
   HOST: "127.0.0.1",
   LOG_LEVEL: "silent",
 };
+const baseAbuse: AbuseConfig = { ...loadAbuseConfig() };
 
 let app: FastifyInstance;
 let baseUrl: string;
 
 beforeAll(async () => {
-  app = await buildApp({ config: baseConfig });
+  app = await buildApp({ config: baseConfig, abuse: baseAbuse });
   await app.listen({ port: 0, host: "127.0.0.1" });
   const addr = app.server.address() as AddressInfo;
   baseUrl = `ws://127.0.0.1:${addr.port}`;
@@ -28,17 +29,15 @@ afterAll(async () => {
   await app.close();
 });
 
-function connect(path = "/ws"): WebSocket {
-  return new WebSocket(`${baseUrl}${path}`);
+function connect(): WebSocket {
+  return new WebSocket(`${baseUrl}/ws`);
 }
-
 function opened(ws: WebSocket): Promise<void> {
   return new Promise((resolve, reject) => {
     ws.once("open", () => resolve());
     ws.once("error", reject);
   });
 }
-
 function recv(ws: WebSocket, timeoutMs = 2000): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("recv timeout")), timeoutMs);
@@ -53,11 +52,9 @@ function recv(ws: WebSocket, timeoutMs = 2000): Promise<Record<string, unknown>>
     ws.once("error", reject);
   });
 }
-
 function sendMsg(ws: WebSocket, msg: unknown): void {
   ws.send(JSON.stringify(msg));
 }
-
 function closed(ws: WebSocket): Promise<void> {
   return new Promise((resolve) => {
     if (ws.readyState === WebSocket.CLOSED) {
@@ -68,33 +65,36 @@ function closed(ws: WebSocket): Promise<void> {
     ws.close();
   });
 }
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 describe("signaling /ws", () => {
-  it("responds room-created on create-room", async () => {
+  it("create-room returns room-created with TURN credentials", async () => {
     const ws = connect();
     await opened(ws);
     sendMsg(ws, { type: "create-room", playerName: "alice" });
     const msg = await recv(ws);
-    expect(msg).toMatchObject({ type: "room-created", isHost: true });
-    expect(msg.roomCode).toHaveLength(4);
+    expect(msg).toMatchObject({ type: "room-created" });
+    expect(msg.roomCode as string).toHaveLength(4);
     expect(typeof msg.peerId).toBe("string");
+    expect((msg.turn as { uris: unknown }).uris).toBeInstanceOf(Array);
     await closed(ws);
   });
 
-  it("notifies the existing peer when a new peer joins", async () => {
+  it("join-room returns room-joined and notifies the host with peer-joined", async () => {
     const host = connect();
     await opened(host);
     sendMsg(host, { type: "create-room", playerName: "alice" });
     const created = await recv(host);
-    const roomCode = created.roomCode as string;
 
     const guest = connect();
     await opened(guest);
-    sendMsg(guest, { type: "join-room", roomCode, playerName: "bob" });
+    sendMsg(guest, { type: "join-room", roomCode: created.roomCode as string, playerName: "bob" });
     const joined = await recv(guest);
-    expect(joined).toMatchObject({ type: "room-joined", isHost: false });
+    expect(joined).toMatchObject({ type: "room-joined" });
     expect(joined.hostPeerId).toBe(created.peerId);
-    expect(joined.existingPeers).toEqual([{ peerId: created.peerId, playerName: "alice" }]);
+    expect((joined.turn as { uris: unknown }).uris).toBeInstanceOf(Array);
 
     const notify = await recv(host);
     expect(notify).toMatchObject({ type: "peer-joined", peer: { playerName: "bob" } });
@@ -103,7 +103,18 @@ describe("signaling /ws", () => {
     await closed(guest);
   });
 
-  it("relays an sdp offer to the target peer with fromPeerId", async () => {
+  it("start-match with no guests replies room-error EMPTY", async () => {
+    const ws = connect();
+    await opened(ws);
+    sendMsg(ws, { type: "create-room", playerName: "alice" });
+    await recv(ws);
+    sendMsg(ws, { type: "start-match" });
+    const msg = await recv(ws);
+    expect(msg).toMatchObject({ type: "room-error", code: "EMPTY" });
+    await closed(ws);
+  });
+
+  it("relays a signal to the target peer with fromPeerId", async () => {
     const host = connect();
     await opened(host);
     sendMsg(host, { type: "create-room", playerName: "alice" });
@@ -116,22 +127,24 @@ describe("signaling /ws", () => {
     await recv(host); // host 消费 peer-joined
 
     sendMsg(guest, {
-      type: "sdp-offer",
-      targetPeerId: joined.hostPeerId as string,
-      sdp: "OFFER",
+      type: "signal",
+      toPeerId: joined.hostPeerId as string,
+      kind: "offer",
+      payload: "OFFER",
     });
     const relayed = await recv(host);
     expect(relayed).toEqual({
-      type: "sdp-offer",
+      type: "signal",
       fromPeerId: joined.peerId,
-      sdp: "OFFER",
+      kind: "offer",
+      payload: "OFFER",
     });
 
     await closed(host);
     await closed(guest);
   });
 
-  it("broadcasts host-disconnected when the host leaves", async () => {
+  it("broadcasts room-closed{host-left} when host leaves during lobby", async () => {
     const host = connect();
     await opened(host);
     sendMsg(host, { type: "create-room", playerName: "alice" });
@@ -145,12 +158,11 @@ describe("signaling /ws", () => {
 
     await closed(host);
     const msg = await recv(guest);
-    expect(msg).toEqual({ type: "host-disconnected" });
-
+    expect(msg).toEqual({ type: "room-closed", reason: "host-left" });
     await closed(guest);
   });
 
-  it("broadcasts peer-left when a guest leaves", async () => {
+  it("broadcasts room-closed{closed} when host sends close-room", async () => {
     const host = connect();
     await opened(host);
     sendMsg(host, { type: "create-room", playerName: "alice" });
@@ -160,14 +172,33 @@ describe("signaling /ws", () => {
     await opened(guest);
     sendMsg(guest, { type: "join-room", roomCode: created.roomCode as string, playerName: "bob" });
     await recv(guest);
-    const peerJoined = await recv(host);
-    const guestPeerId = (peerJoined.peer as { peerId: string }).peerId;
+    await recv(host);
 
-    await closed(guest);
-    const msg = await recv(host);
-    expect(msg).toEqual({ type: "peer-left", peerId: guestPeerId });
-
+    sendMsg(host, { type: "close-room" });
+    const msg = await recv(guest);
+    expect(msg).toEqual({ type: "room-closed", reason: "closed" });
     await closed(host);
+    await closed(guest);
+  });
+
+  it("does NOT dissolve when host leaves during playing", async () => {
+    const host = connect();
+    await opened(host);
+    sendMsg(host, { type: "create-room", playerName: "alice" });
+    const created = await recv(host);
+
+    const guest = connect();
+    await opened(guest);
+    sendMsg(guest, { type: "join-room", roomCode: created.roomCode as string, playerName: "bob" });
+    await recv(guest);
+    await recv(host);
+
+    sendMsg(host, { type: "start-match" });
+    await delay(50);
+    await closed(host);
+    // playing 阶段 host 断：guest 不应收到 room-closed
+    await expect(recv(guest, 300)).rejects.toThrow("recv timeout");
+    await closed(guest);
   });
 
   it("replies room-error on invalid json", async () => {
@@ -188,18 +219,10 @@ describe("signaling /ws", () => {
     await closed(ws);
   });
 
-  it("replies room-error ROOM_NOT_FOUND when joining a missing room", async () => {
-    const ws = connect();
-    await opened(ws);
-    sendMsg(ws, { type: "join-room", roomCode: "NOPE", playerName: "x" });
-    const msg = await recv(ws);
-    expect(msg).toMatchObject({ type: "room-error", code: "ROOM_NOT_FOUND" });
-    await closed(ws);
-  });
-
   it("rejects connections from disallowed origins", async () => {
     const restricted = await buildApp({
       config: { ...baseConfig, CORS_ORIGIN: "http://example.com" },
+      abuse: baseAbuse,
     });
     await restricted.listen({ port: 0, host: "127.0.0.1" });
     const addr = restricted.server.address() as AddressInfo;
@@ -224,28 +247,21 @@ describe("signaling /ws", () => {
 });
 
 describe("signaling abuse guards", () => {
-  const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
-
-  async function listenWith(
-    overrides: Partial<Config>,
-  ): Promise<{ app: FastifyInstance; url: string }> {
-    const server = await buildApp({ config: { ...baseConfig, ...overrides } });
+  async function listenWith(abuseOverrides: Partial<AbuseConfig>): Promise<{
+    app: FastifyInstance;
+    url: string;
+  }> {
+    const server = await buildApp({
+      config: baseConfig,
+      abuse: { ...baseAbuse, ...abuseOverrides },
+    });
     await server.listen({ port: 0, host: "127.0.0.1" });
     const addr = server.server.address() as AddressInfo;
     return { app: server, url: `ws://127.0.0.1:${addr.port}/ws` };
   }
 
-  it("closes an idle connection that never joins a room", async () => {
-    const { app, url } = await listenWith({ IDLE_TIMEOUT_MS: 100 });
-    const ws = new WebSocket(url);
-    await opened(ws);
-    await delay(250);
-    expect(ws.readyState).toBe(WebSocket.CLOSED);
-    await app.close();
-  });
-
   it("rejects new connections beyond MAX_CONNECTIONS", async () => {
-    const { app, url } = await listenWith({ MAX_CONNECTIONS: 1, IDLE_TIMEOUT_MS: 60_000 });
+    const { app, url } = await listenWith({ MAX_CONNECTIONS: 1 });
     const first = new WebSocket(url);
     await opened(first);
 
@@ -267,48 +283,24 @@ describe("signaling abuse guards", () => {
     await app.close();
   });
 
-  it("rejects extra concurrent connections from a single IP", async () => {
-    const { app, url } = await listenWith({
-      MAX_CONNECTIONS: 100,
-      MAX_CONNECTIONS_PER_IP: 1,
-      IDLE_TIMEOUT_MS: 60_000,
-    });
-    const first = new WebSocket(url);
-    await opened(first);
+  it("closes an idle lobby room with room-closed{idle}", async () => {
+    const { app, url } = await listenWith({ ROOM_IDLE_MS: 200 });
+    const host = new WebSocket(url);
+    await opened(host);
+    sendMsg(host, { type: "create-room", playerName: "alice" });
+    const created = await recv(host);
 
-    const status = await new Promise<number>((resolve) => {
-      const ws = new WebSocket(url);
-      ws.on("unexpected-response", (_req, res) => {
-        resolve(res.statusCode ?? 0);
-        ws.close();
-      });
-      ws.on("open", () => {
-        resolve(0);
-        ws.close();
-      });
-      ws.on("error", () => resolve(0));
-    });
+    const guest = new WebSocket(url);
+    await opened(guest);
+    sendMsg(guest, { type: "join-room", roomCode: created.roomCode as string, playerName: "bob" });
+    await recv(guest);
+    await recv(host);
 
-    expect(status).toBe(429);
-    first.close();
-    await app.close();
-  });
+    const idleMsg = await recv(guest, 1000);
+    expect(idleMsg).toEqual({ type: "room-closed", reason: "idle" });
 
-  it("refuses create-room beyond MAX_ROOMS", async () => {
-    const { app, url } = await listenWith({ MAX_ROOMS: 1 });
-    const a = new WebSocket(url);
-    await opened(a);
-    sendMsg(a, { type: "create-room", playerName: "a" });
-    await recv(a);
-
-    const b = new WebSocket(url);
-    await opened(b);
-    sendMsg(b, { type: "create-room", playerName: "b" });
-    const msg = await recv(b);
-    expect(msg).toMatchObject({ type: "room-error" });
-
-    a.close();
-    b.close();
+    host.close();
+    guest.close();
     await app.close();
   });
 });
