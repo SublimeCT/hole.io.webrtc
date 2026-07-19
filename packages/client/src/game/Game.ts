@@ -93,17 +93,23 @@ export class Game {
   readonly #cameraForward = new THREE.Vector3();
   readonly #cameraRight = new THREE.Vector3();
   readonly #worldUp = new THREE.Vector3(0, 1, 0);
-  #state: SimulationState = createInitialSimulation();
+  #state: SimulationState;
   #lastTime = 0;
   #accumulator = 0;
   #hudAccumulator = 0;
   #matchStarted = false;
   #preferences: GamePreferences;
 
-  private constructor(canvas: HTMLCanvasElement, ui: GameUi, preferences: GamePreferences) {
+  private constructor(
+    canvas: HTMLCanvasElement,
+    ui: GameUi,
+    preferences: GamePreferences,
+    initialState: SimulationState,
+  ) {
     this.#canvas = canvas;
     this.#ui = ui;
     this.#preferences = preferences;
+    this.#state = initialState;
     this.#renderer = new THREE.WebGLRenderer({
       canvas,
       antialias: true,
@@ -133,7 +139,9 @@ export class Game {
     ui: GameUi,
     preferences: GamePreferences,
   ): Promise<Game> {
-    const game = new Game(canvas, ui, preferences);
+    const mapSeed = 0x5eed1234;
+    const spawnSeed = (crypto.getRandomValues(new Uint32Array(1))[0] ?? Date.now()) >>> 0;
+    const game = new Game(canvas, ui, preferences, createInitialSimulation(mapSeed, spawnSeed));
     await game.#cityObjects.initialize(game.#state.objects, (loaded, total) => {
       const progress = total === 0 ? 1 : loaded / total;
       ui.loadingBar.style.transform = `scaleX(${progress})`;
@@ -677,7 +685,8 @@ export class Game {
   }
 
   readonly #restart = (): void => {
-    this.#state = createInitialSimulation();
+    const spawnSeed = (crypto.getRandomValues(new Uint32Array(1))[0] ?? Date.now()) >>> 0;
+    this.#state = createInitialSimulation(0x5eed1234, spawnSeed);
     this.#accumulator = 0;
     this.#hudAccumulator = 0;
     this.#matchStarted = true;

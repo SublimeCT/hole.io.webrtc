@@ -557,6 +557,22 @@ describe("world defaults", () => {
     }
   });
 
+  it("spawns every hole clear of every initial map object", () => {
+    const first = createInitialSimulation(0x5eed1234, 0x10203040);
+    const second = createInitialSimulation(0x5eed1234, 0x50607080);
+    expect(first.holes.map((hole) => hole.position)).not.toEqual(
+      second.holes.map((hole) => hole.position),
+    );
+    first.holes.forEach((hole) => {
+      first.objects.forEach((object) => {
+        const objectRadius = Math.hypot(object.size.x, object.size.y) / 2;
+        expect(
+          Math.hypot(hole.position.x - object.position.x, hole.position.y - object.position.y),
+        ).toBeGreaterThanOrEqual(hole.radius + objectRadius);
+      });
+    });
+  });
+
   it("keeps bot positions inside the map throughout a full match", () => {
     let state: SimulationState = { ...createInitialSimulation(), objects: [] };
     for (let frame = 0; frame < GAME_DURATION_SECONDS * 60; frame += 1) {

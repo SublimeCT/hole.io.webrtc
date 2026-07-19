@@ -84,6 +84,8 @@ const SIDEWALK_CENTER_OFFSET = 3.5 + SIDEWALK_WIDTH / 2;
 const ROAD_AND_SIDEWALK_HALF_WIDTH = 3.5 + SIDEWALK_WIDTH;
 const SMALL_PROP_MULTIPLIER = 5;
 const OCCUPANCY_CELL_SIZE = 12;
+const SPAWN_ATTEMPTS = 4_096;
+const SPAWN_SAFETY_MARGIN = 0.08;
 
 interface LandInterval {
   minimum: number;
@@ -657,13 +659,63 @@ function buildCityObjects(seed: number): readonly WorldObjectState[] {
   return objects;
 }
 
-function createHoles(seed: number): readonly [readonly HoleState[], number] {
+function createHoles(
+  seed: number,
+  objects: readonly WorldObjectState[],
+): readonly [readonly HoleState[], number] {
   const holes: HoleState[] = [];
   let rngState = seed >>> 0;
-  const spawnLimit = MAP_HALF_SIZE - 30;
+  const spawnLimit = MAP_HALF_SIZE - INITIAL_HOLE_RADIUS - 1;
+  const blockedCells = new Map<string, OccupiedFootprint[]>();
+  for (const object of objects) {
+    const radius = Math.hypot(object.size.x, object.size.y) / 2;
+    const footprint: OccupiedFootprint = {
+      id: object.id,
+      position: object.position,
+      radius,
+    };
+    const [minimumX, maximumX, minimumY, maximumY] = occupancyCellRange(
+      object.position,
+      radius + INITIAL_HOLE_RADIUS + SPAWN_SAFETY_MARGIN,
+    );
+    for (let cellY = minimumY; cellY <= maximumY; cellY += 1) {
+      for (let cellX = minimumX; cellX <= maximumX; cellX += 1) {
+        const key = occupancyCellKey(cellX, cellY);
+        const cell = blockedCells.get(key) ?? [];
+        cell.push(footprint);
+        blockedCells.set(key, cell);
+      }
+    }
+  }
+  const isObjectFree = (position: Vector2): boolean => {
+    const queryRadius = INITIAL_HOLE_RADIUS + SPAWN_SAFETY_MARGIN;
+    const [minimumX, maximumX, minimumY, maximumY] = occupancyCellRange(position, queryRadius);
+    const checked = new Set<string>();
+    for (let cellY = minimumY; cellY <= maximumY; cellY += 1) {
+      for (let cellX = minimumX; cellX <= maximumX; cellX += 1) {
+        const candidates = blockedCells.get(occupancyCellKey(cellX, cellY));
+        if (!candidates) {
+          continue;
+        }
+        for (const candidate of candidates) {
+          if (checked.has(candidate.id)) {
+            continue;
+          }
+          checked.add(candidate.id);
+          if (
+            Math.hypot(candidate.position.x - position.x, candidate.position.y - position.y) <
+            candidate.radius + INITIAL_HOLE_RADIUS + SPAWN_SAFETY_MARGIN
+          ) {
+            return false;
+          }
+        }
+      }
+    }
+    return true;
+  };
   for (let index = 0; index <= BOT_COUNT; index += 1) {
     let position: Vector2 | null = null;
-    for (let attempt = 0; attempt < 96; attempt += 1) {
+    for (let attempt = 0; attempt < SPAWN_ATTEMPTS; attempt += 1) {
       const [randomX, stateAfterX] = nextRandom(rngState);
       const [randomY, stateAfterY] = nextRandom(stateAfterX);
       rngState = stateAfterY;
@@ -672,6 +724,7 @@ function createHoles(seed: number): readonly [readonly HoleState[], number] {
         y: (randomY * 2 - 1) * spawnLimit,
       };
       if (
+        isObjectFree(candidate) &&
         holes.every(
           (hole) =>
             Math.hypot(hole.position.x - candidate.x, hole.position.y - candidate.y) >=
@@ -713,14 +766,15 @@ function createHoles(seed: number): readonly [readonly HoleState[], number] {
   return [holes, rngState];
 }
 
-export function createInitialSimulation(seed = 0x5eed1234): SimulationState {
-  const [holes, rngState] = createHoles(seed);
+export function createInitialSimulation(seed = 0x5eed1234, spawnSeed = seed): SimulationState {
+  const objects = buildCityObjects(seed);
+  const [holes, rngState] = createHoles(spawnSeed, objects);
   return {
     elapsed: 0,
     remaining: GAME_DURATION_SECONDS,
     status: "playing",
     holes,
-    objects: buildCityObjects(seed),
+    objects,
     rngState,
   };
 }

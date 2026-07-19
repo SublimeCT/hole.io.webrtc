@@ -8,6 +8,7 @@ export class InputController {
   readonly #dragKnob: HTMLElement;
   readonly #pressedKeys = new Set<string>();
   #pointerId: number | null = null;
+  #touchId: number | null = null;
   #startX = 0;
   #startY = 0;
   #pointerDirection: Vector2 = { x: 0, y: 0 };
@@ -19,10 +20,17 @@ export class InputController {
     window.addEventListener("keydown", this.#onKeyDown);
     window.addEventListener("keyup", this.#onKeyUp);
     window.addEventListener("blur", this.#onBlur);
-    canvas.addEventListener("pointerdown", this.#onPointerDown);
-    canvas.addEventListener("pointermove", this.#onPointerMove);
-    canvas.addEventListener("pointerup", this.#onPointerUp);
-    canvas.addEventListener("pointercancel", this.#onPointerUp);
+    canvas.addEventListener("pointerdown", this.#onPointerDown, { passive: false });
+    canvas.addEventListener("pointermove", this.#onPointerMove, { passive: false });
+    canvas.addEventListener("pointerup", this.#onPointerUp, { passive: false });
+    canvas.addEventListener("pointercancel", this.#onPointerUp, { passive: false });
+    canvas.addEventListener("lostpointercapture", this.#onLostPointerCapture);
+    // Keep native touch listeners even when Pointer Events are exposed: mobile
+    // emulators and embedded WebViews do not always dispatch the same event family.
+    canvas.addEventListener("touchstart", this.#onTouchStart, { passive: false });
+    window.addEventListener("touchmove", this.#onTouchMove, { passive: false });
+    window.addEventListener("touchend", this.#onTouchEnd, { passive: false });
+    window.addEventListener("touchcancel", this.#onTouchEnd, { passive: false });
   }
 
   getDirection(): Vector2 {
@@ -47,6 +55,11 @@ export class InputController {
     this.#canvas.removeEventListener("pointermove", this.#onPointerMove);
     this.#canvas.removeEventListener("pointerup", this.#onPointerUp);
     this.#canvas.removeEventListener("pointercancel", this.#onPointerUp);
+    this.#canvas.removeEventListener("lostpointercapture", this.#onLostPointerCapture);
+    this.#canvas.removeEventListener("touchstart", this.#onTouchStart);
+    window.removeEventListener("touchmove", this.#onTouchMove);
+    window.removeEventListener("touchend", this.#onTouchEnd);
+    window.removeEventListener("touchcancel", this.#onTouchEnd);
   }
 
   readonly #onKeyDown = (event: KeyboardEvent): void => {
@@ -66,30 +79,81 @@ export class InputController {
   };
 
   readonly #onPointerDown = (event: PointerEvent): void => {
+    if (event.pointerType === "mouse" && event.button !== 0) {
+      return;
+    }
+    event.preventDefault();
     if (this.#pointerId !== null) {
       return;
     }
     this.#pointerId = event.pointerId;
-    this.#startX = event.clientX;
-    this.#startY = event.clientY;
-    this.#canvas.setPointerCapture(event.pointerId);
-    this.#dragPad.style.left = `${this.#startX - 44}px`;
-    this.#dragPad.style.top = `${this.#startY - 44}px`;
-    this.#dragPad.classList.add("is-active");
-    this.#updatePointer(event.clientX, event.clientY);
+    try {
+      this.#canvas.setPointerCapture(event.pointerId);
+    } catch {
+      // Some embedded WebViews expose Pointer Events without pointer capture.
+    }
+    this.#beginPointer(event.clientX, event.clientY);
   };
 
   readonly #onPointerMove = (event: PointerEvent): void => {
     if (event.pointerId === this.#pointerId) {
+      event.preventDefault();
       this.#updatePointer(event.clientX, event.clientY);
     }
   };
 
   readonly #onPointerUp = (event: PointerEvent): void => {
     if (event.pointerId === this.#pointerId) {
+      event.preventDefault();
       this.#endPointer();
     }
   };
+
+  readonly #onLostPointerCapture = (): void => {
+    this.#endPointer();
+  };
+
+  readonly #onTouchStart = (event: TouchEvent): void => {
+    event.preventDefault();
+    if (this.#touchId !== null || this.#pointerId !== null) {
+      return;
+    }
+    const touch = event.changedTouches[0];
+    if (!touch) {
+      return;
+    }
+    this.#touchId = touch.identifier;
+    this.#beginPointer(touch.clientX, touch.clientY);
+  };
+
+  readonly #onTouchMove = (event: TouchEvent): void => {
+    event.preventDefault();
+    const touch = this.#findTouch(event.changedTouches);
+    if (touch) {
+      this.#updatePointer(touch.clientX, touch.clientY);
+    }
+  };
+
+  readonly #onTouchEnd = (event: TouchEvent): void => {
+    event.preventDefault();
+    if (this.#findTouch(event.changedTouches)) {
+      this.#touchId = null;
+      this.#endPointer();
+    }
+  };
+
+  #findTouch(touches: TouchList): Touch | null {
+    if (this.#touchId === null) {
+      return null;
+    }
+    for (let index = 0; index < touches.length; index += 1) {
+      const touch = touches.item(index);
+      if (touch?.identifier === this.#touchId) {
+        return touch;
+      }
+    }
+    return null;
+  }
 
   #updatePointer(clientX: number, clientY: number): void {
     const deltaX = clientX - this.#startX;
@@ -107,8 +171,18 @@ export class InputController {
 
   #endPointer(): void {
     this.#pointerId = null;
+    this.#touchId = null;
     this.#pointerDirection = { x: 0, y: 0 };
     this.#dragKnob.style.transform = "translate(0, 0)";
     this.#dragPad.classList.remove("is-active");
+  }
+
+  #beginPointer(clientX: number, clientY: number): void {
+    this.#startX = clientX;
+    this.#startY = clientY;
+    this.#dragPad.style.left = `${clientX - 44}px`;
+    this.#dragPad.style.top = `${clientY - 44}px`;
+    this.#dragPad.classList.add("is-active");
+    this.#updatePointer(clientX, clientY);
   }
 }
