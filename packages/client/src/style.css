@@ -35,6 +35,7 @@ body {
 button {
   color: inherit;
   font: inherit;
+  touch-action: manipulation;
 }
 
 .app-shell,

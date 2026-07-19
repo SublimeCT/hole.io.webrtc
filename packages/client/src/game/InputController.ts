@@ -127,19 +127,21 @@ export class InputController {
   };
 
   readonly #onTouchMove = (event: TouchEvent): void => {
-    event.preventDefault();
     const touch = this.#findTouch(event.changedTouches);
-    if (touch) {
-      this.#updatePointer(touch.clientX, touch.clientY);
+    if (!touch) {
+      return;
     }
+    event.preventDefault();
+    this.#updatePointer(touch.clientX, touch.clientY);
   };
 
   readonly #onTouchEnd = (event: TouchEvent): void => {
-    event.preventDefault();
-    if (this.#findTouch(event.changedTouches)) {
-      this.#touchId = null;
-      this.#endPointer();
+    if (!this.#findTouch(event.changedTouches)) {
+      return;
     }
+    event.preventDefault();
+    this.#touchId = null;
+    this.#endPointer();
   };
 
   #findTouch(touches: TouchList): Touch | null {
