@@ -265,7 +265,9 @@ export class CityObjectRenderer {
   }
 
   async #loadPrefab(definition: PrefabDefinition): Promise<LoadedPrefab> {
-    const gltf = await this.#loader.loadAsync(definition.assetPath);
+    // Resolve public assets against Vite's base path so project Pages sites work.
+    const assetUrl = `${import.meta.env.BASE_URL}${definition.assetPath.replace(/^\/+/, "")}`;
+    const gltf = await this.#loader.loadAsync(assetUrl);
     const model = gltf.scene;
     model.updateMatrixWorld(true);
     const sourceBounds = new THREE.Box3().setFromObject(model);

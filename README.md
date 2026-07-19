@@ -55,6 +55,14 @@ pnpm --filter @hole-io/client typecheck
 pnpm --filter @hole-io/shared typecheck
 ```
 
+## GitHub Pages 部署
+
+仓库包含 [`deploy-pages.yml`](./.github/workflows/deploy-pages.yml)，推送到 `main` 后会自动构建并部署 `packages/client` 到 GitHub Pages。也可以在 Actions 页面手动运行该 workflow。
+
+首次使用时，在 GitHub 仓库设置中启用 Pages，并将构建来源设为 **GitHub Actions**。Vite 会在 Actions 环境中自动使用仓库名作为静态资源前缀，适配 `https://<user>.github.io/<repo>/` 形式的项目站点。
+
+GitHub Pages 只托管静态客户端。联机模式仍需要部署独立的 Fastify/WebSocket 服务，并将客户端连接地址配置为 HTTPS 页面可访问的 `wss://` 地址；后端的 `CORS_ORIGIN` 应包含 Pages 站点 origin。WebRTC 建连失败时还需要可用的 STUN/TURN 配置。
+
 ## 游戏玩法
 
 - 单局时长：`180s`。
