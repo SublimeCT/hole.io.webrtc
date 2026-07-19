@@ -1,17 +1,37 @@
 {
-  "name": "hole.io.webrtc",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "name": "hole-io-webrtc",
+  "version": "0.1.0",
+  "private": true,
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "dev": "pnpm --filter @hole-io/client dev",
+    "dev:server": "pnpm --filter @hole-io/server dev",
+    "start:server": "pnpm --filter @hole-io/server start",
+    "build": "pnpm --filter @hole-io/client build",
+    "lint": "oxlint .",
+    "lint:fix": "oxlint --fix .",
+    "format": "oxfmt --write .",
+    "format:check": "oxfmt --check .",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "test": "vitest run",
+    "prepare": "husky"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "packageManager": "pnpm@10.4.1",
   "devDependencies": {
     "@types/node": "^26.1.1",
-    "typescript": "^7.0.2"
-  }
+    "husky": "^9.1.7",
+    "lint-staged": "^16.1.2",
+    "oxfmt": "^0.19.0",
+    "oxlint": "^1.41.0",
+    "prettier": "^3.6.2",
+    "typescript": "^7.0.2",
+    "vitest": "^3.2.4"
+  },
+  "lint-staged": {
+    "*.{ts,tsx}": [
+      "oxlint --fix",
+      "oxfmt --write"
+    ],
+    "*.{css,html,json,jsonc,yaml,yml}": "oxfmt --write",
+    "*.md": "prettier --write"
+  },
+  "packageManager": "pnpm@10.4.1"
 }

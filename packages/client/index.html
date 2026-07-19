@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+    <meta name="theme-color" content="#122a27" />
+    <link rel="icon" href="data:," />
+    <title>Hole City</title>
+  </head>
+  <body>
+    <main id="app" class="app-shell is-menu">
+      <canvas id="game-canvas" class="game-canvas" aria-label="Hole City 游戏场景"></canvas>
+      <div class="screen-texture" aria-hidden="true"></div>
+
+      <div id="loading" class="loading" role="status" aria-live="polite">
+        <div class="loading-content">
+          <span class="kicker">CONNECTING DISTRICT</span>
+          <strong>HOLE CITY</strong>
+          <div class="loading-track"><i id="loading-bar"></i></div>
+          <span id="loading-status" class="loading-status">00 / 00</span>
+        </div>
+      </div>
+
+      <section id="launch-screen" class="overlay menu-overlay" aria-label="开局菜单">
+        <div class="menu-copy">
+          <span class="kicker">SINK CITY / COMPETITIVE RUN</span>
+          <h1>吞城计划</h1>
+          <p>三分钟城市吞噬竞技</p>
+          <div class="menu-actions">
+            <button id="start-match" class="primary-command is-menu-focused" type="button">
+              <span>开始游戏</span>
+            </button>
+            <button id="open-settings" class="secondary-command" type="button">
+              <span>设置</span>
+            </button>
+            <button id="online-play" class="secondary-command" type="button">
+              <span>联机游玩</span>
+            </button>
+            <button id="share-game" class="secondary-command" type="button">
+              <span>分享游戏</span>
+            </button>
+            <span id="share-status" class="menu-status" role="status" aria-live="polite"></span>
+          </div>
+        </div>
+        <aside class="menu-brief" aria-label="对局信息">
+          <span class="panel-label">MATCH BRIEF</span>
+          <strong>单机对局</strong>
+          <div class="brief-grid">
+            <span><b>03</b> 玩家</span>
+            <span><b>03:00</b> 时长</span>
+            <span><b>01</b> 次复活</span>
+          </div>
+          <i>城市吞噬赛</i>
+        </aside>
+      </section>
+
+      <section id="settings-dialog" class="dialog-layer" aria-labelledby="settings-title" hidden>
+        <form id="settings-form" class="dialog-sheet">
+          <header>
+            <span class="result-mark">*</span>
+            <div>
+              <span class="kicker">PLAYER PROFILE</span>
+              <h2 id="settings-title">设置</h2>
+            </div>
+          </header>
+          <label class="settings-field" for="player-name">
+            <span>玩家名称</span>
+            <input
+              id="player-name"
+              name="player-name"
+              minlength="1"
+              maxlength="9"
+              autocomplete="nickname"
+              required
+            />
+          </label>
+          <fieldset class="color-picker">
+            <legend>黑洞圆环</legend>
+            <div>
+              <button
+                class="color-swatch color-mint"
+                type="button"
+                data-color="#6ef2d0"
+                aria-label="薄荷绿"
+              ></button>
+              <button
+                class="color-swatch color-coral"
+                type="button"
+                data-color="#ff7a63"
+                aria-label="珊瑚红"
+              ></button>
+              <button
+                class="color-swatch color-sun"
+                type="button"
+                data-color="#ffdf4d"
+                aria-label="日光黄"
+              ></button>
+              <button
+                class="color-swatch color-violet"
+                type="button"
+                data-color="#9c8cff"
+                aria-label="紫罗兰"
+              ></button>
+              <button
+                class="color-swatch color-blue"
+                type="button"
+                data-color="#5aa9ff"
+                aria-label="天空蓝"
+              ></button>
+              <button
+                class="color-swatch color-green"
+                type="button"
+                data-color="#55d68b"
+                aria-label="青草绿"
+              ></button>
+              <button
+                class="color-swatch color-orange"
+                type="button"
+                data-color="#ff9f43"
+                aria-label="橙色"
+              ></button>
+              <button
+                class="color-swatch color-pink"
+                type="button"
+                data-color="#ff80b5"
+                aria-label="粉红"
+              ></button>
+              <button
+                class="color-swatch color-rose"
+                type="button"
+                data-color="#e64e6e"
+                aria-label="玫瑰红"
+              ></button>
+              <button
+                class="color-swatch color-lime"
+                type="button"
+                data-color="#b7e64e"
+                aria-label="青柠"
+              ></button>
+              <button
+                class="color-swatch color-ice"
+                type="button"
+                data-color="#d7f4ff"
+                aria-label="冰蓝"
+              ></button>
+              <button
+                class="color-swatch color-bronze"
+                type="button"
+                data-color="#c78a56"
+                aria-label="青铜"
+              ></button>
+            </div>
+          </fieldset>
+          <footer class="dialog-actions">
+            <button id="cancel-settings" class="text-command" type="button">
+              <span>取消</span><b class="key-hint">ESC</b>
+            </button>
+            <button class="primary-command" type="submit">
+              <span>保存设置</span><b class="key-hint">ENTER</b>
+            </button>
+          </footer>
+        </form>
+      </section>
+
+      <section id="online-dialog" class="dialog-layer" aria-labelledby="online-title" hidden>
+        <div class="dialog-sheet dialog-notice">
+          <header>
+            <span class="result-mark">!</span>
+            <div>
+              <span class="kicker">ONLINE MODE</span>
+              <h2 id="online-title">开发中</h2>
+            </div>
+          </header>
+          <p>联机竞技正在准备中。当前可直接开始单机对局。</p>
+          <footer class="dialog-actions">
+            <button id="close-online" class="primary-command" type="button">
+              <span>关闭</span><b class="key-hint">ESC</b>
+            </button>
+          </footer>
+        </div>
+      </section>
+
+      <header class="hud match-hud" aria-label="游戏状态">
+        <div class="match-bar">
+          <section class="score-readout">
+            <span class="panel-label">SCORE</span>
+            <strong id="score">00000</strong>
+            <small>YOU</small>
+          </section>
+
+          <section class="time-readout">
+            <span>TIME LEFT</span>
+            <strong id="time">3:00</strong>
+          </section>
+
+          <section class="ranking-panel" aria-label="实时排名">
+            <span class="panel-label">LIVE RANKING</span>
+            <ol>
+              <li id="rank-first" class="rank-row">
+                <span id="rank-first-position">01</span><i></i><b id="rank-first-name">YOU</b
+                ><small>RANK</small><em id="rank-first-score">00000</em>
+              </li>
+              <li id="rank-second" class="rank-row">
+                <span id="rank-second-position">02</span><i></i><b id="rank-second-name">BOT 01</b
+                ><small>RANK</small><em id="rank-second-score">00000</em>
+              </li>
+              <li id="rank-third" class="rank-row">
+                <span id="rank-third-position">03</span><i></i><b id="rank-third-name">BOT 02</b
+                ><small>RANK</small><em id="rank-third-score">00000</em>
+              </li>
+            </ol>
+          </section>
+        </div>
+      </header>
+
+      <section class="player-state growth-module" aria-label="黑洞成长进度">
+        <span>SIZE <b id="size-level">01</b></span>
+        <span id="growth-copy">12 TO NEXT SIZE</span>
+        <span>R <b id="radius">1.15</b></span>
+        <div class="growth-track"><i id="growth-fill"></i></div>
+      </section>
+
+      <div id="score-effects" class="score-effects" aria-hidden="true"></div>
+
+      <div class="direction-layer opponent-indicators" aria-hidden="true">
+        <div id="bot-one-indicator" class="direction-marker bot-one-indicator">
+          <svg id="bot-one-arrow" class="direction-arrow" viewBox="0 0 64 64" aria-hidden="true">
+            <path d="M19 48a13 13 0 0 1 26 0" />
+            <path d="M32 54V18" />
+            <path d="m18 31 14-14 14 14" />
+          </svg>
+          <span class="direction-label"
+            ><i></i><b>BOT 01</b><small id="bot-one-distance">0m</small></span
+          >
+        </div>
+        <div id="bot-two-indicator" class="direction-marker bot-two-indicator">
+          <svg id="bot-two-arrow" class="direction-arrow" viewBox="0 0 64 64" aria-hidden="true">
+            <path d="M19 48a13 13 0 0 1 26 0" />
+            <path d="M32 54V18" />
+            <path d="m18 31 14-14 14 14" />
+          </svg>
+          <span class="direction-label"
+            ><i></i><b>BOT 02</b><small id="bot-two-distance">0m</small></span
+          >
+        </div>
+      </div>
+
+      <div id="drag-pad" class="drag-pad" aria-hidden="true">
+        <div id="drag-knob" class="drag-knob"></div>
+      </div>
+
+      <section id="game-over" class="overlay results-overlay" hidden>
+        <div class="results-sheet">
+          <header>
+            <span class="result-mark">#</span>
+            <div>
+              <span class="kicker">MATCH COMPLETE</span>
+              <h2>FINAL RANKING</h2>
+            </div>
+            <strong id="final-rank" class="final-rank">01</strong>
+          </header>
+          <ol class="final-ranking" aria-label="最终排名">
+            <li id="final-rank-first">
+              <span id="final-rank-first-position">01</span><i></i
+              ><b id="final-rank-first-name">YOU</b><small>RANK</small
+              ><em id="final-rank-first-score">00000</em>
+            </li>
+            <li id="final-rank-second">
+              <span id="final-rank-second-position">02</span><i></i
+              ><b id="final-rank-second-name">BOT 01</b><small>RANK</small
+              ><em id="final-rank-second-score">00000</em>
+            </li>
+            <li id="final-rank-third">
+              <span id="final-rank-third-position">03</span><i></i
+              ><b id="final-rank-third-name">BOT 02</b><small>RANK</small
+              ><em id="final-rank-third-score">00000</em>
+            </li>
+          </ol>
+          <div class="result-metrics">
+            <span>FINAL SCORE <b id="final-score">00000</b></span>
+          </div>
+          <div class="command-row">
+            <button id="restart" class="primary-command" type="button">
+              <span>PLAY AGAIN</span><b class="key-hint">R</b>
+            </button>
+          </div>
+        </div>
+      </section>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

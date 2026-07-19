@@ -1,0 +1,19 @@
+{
+  "name": "@hole-io/client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@hole-io/shared": "workspace:*",
+    "three": "^0.179.1"
+  },
+  "devDependencies": {
+    "@types/three": "^0.185.1",
+    "vite": "^7.0.6"
+  }
+}

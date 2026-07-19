@@ -1,0 +1,14 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "printWidth": 100,
+  "ignorePatterns": [
+    "**/dist/**",
+    "**/coverage/**",
+    ".agents/**",
+    ".codex/**",
+    ".claude/**",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "pnpm-lock.yaml"
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "name": "@hole-io/shared",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./simulation": "./simulation/index.ts",
+    "./protocol": "./protocol/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "cannon-es": "^0.20.0"
+  }
+}
