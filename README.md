@@ -1,0 +1,146 @@
+# Hole City
+
+[![Phase](https://img.shields.io/badge/phase-1%20single--player-22c55e)](./SPEC.md)
+[![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6)](./tsconfig.base.json)
+[![Vite](https://img.shields.io/badge/build-Vite-646cff)](./packages/client/vite.config.ts)
+[![Three.js](https://img.shields.io/badge/rendering-Three.js-black)](./packages/client/package.json)
+[![pnpm](https://img.shields.io/badge/package%20manager-pnpm-f69220)](./package.json)
+
+Hole City 是一个 Hole.io 风格的 Web 3D 城市吞噬游戏。当前仓库的主要可玩入口是单机模式：玩家控制黑洞在城市街区中移动，吞噬车辆、建筑、行人和道路物件，并与两个 Bot 竞争分数。
+
+项目采用 pnpm workspace，游戏模拟、客户端渲染和后续联机协议分层维护。当前版本处于 Phase 1：单机核心玩法已经可运行，联机服务仍在开发中。
+
+![Hole City 首页截图](./docs/screenshots/home-1080p.png)
+
+## 当前状态
+
+- Phase 0：workspace、Vite、Three.js、TypeScript strict、基础输入和跟随摄像机已完成。
+- Phase 1：单机权威模拟、城市地图、物理吞噬、Bot、HUD、复活和结算流程已完成。
+- Phase 2：地图编辑器尚未实现。
+- Phase 3：信令服务和协议骨架已存在，完整 WebRTC 对局流程尚未作为当前默认玩法提供。
+- Phase 4/5：存档、商店和完整移动端优化尚未实现。
+
+## 快速开始
+
+### 环境要求
+
+- Node.js 发行版，建议使用当前 LTS
+- pnpm `10.x`
+
+### 安装与运行
+
+```bash
+pnpm install
+pnpm dev
+```
+
+开发服务器启动后，打开终端输出的本地地址。`pnpm dev` 只启动客户端，不会启动后端；停止开发时结束对应终端中的进程。
+
+### 常用命令
+
+```bash
+pnpm test                 # 运行全部测试
+pnpm --filter @hole-io/shared test
+pnpm build                # 构建客户端
+pnpm typecheck            # 检查所有 workspace 包
+pnpm lint                 # oxlint
+pnpm format               # oxfmt 格式化
+pnpm format:check        # 检查格式
+```
+
+客户端和共享模拟可以独立检查：
+
+```bash
+pnpm --filter @hole-io/client typecheck
+pnpm --filter @hole-io/shared typecheck
+```
+
+## 游戏玩法
+
+- 单局时长：`180s`。
+- 初始黑洞半径：`1.15m`。
+- 玩家移动：方向键、WASD 或鼠标/指针拖拽。
+- 黑洞成长：分数在等级锚点之间连续插值；超过最高锚点后仍按面积比例继续增长。
+- 吞噬判定：空间哈希只负责候选筛选；物体必须被洞口完整覆盖，并由地表洞缘承托后通过地面，才会真正下落、消失和计分。
+- 物理表现：只有正在被吞噬的物体进入 cannon-es；地下井壁和井底只渲染，不参与碰撞。
+- 分值：建筑物单体最高 `+50`，非建筑物单体最高 `+30`。
+- 玩家对抗：大洞完全覆盖小洞时可以吞噬对方；每位玩家有一次复活机会，复活保留原积分和尺寸，并获得 `5s` 无敌时间。
+- Bot：两个 Bot 使用低速、近距离最近目标策略，不按全图最大收益路线行动。
+
+地图当前为 `484m × 484m` 城市，包含六类街区、11 条横向道路和 11 条纵向道路。场景包含商业建筑、住宅建筑、车辆、行人、树木、围栏、花箱、纸箱、交通锥和车辆散件等预制件；初始布局和移动路线都经过无重叠检查。
+
+## 操作
+
+### 对局中
+
+- `ArrowUp` / `ArrowDown` / `ArrowLeft` / `ArrowRight` 或 `WASD`：移动。
+- 鼠标或指针拖拽：控制移动方向。
+- `R`：结算页面重新开始。
+
+### 菜单与弹窗
+
+- 方向键：在菜单按钮之间移动当前项。
+- `Enter` 或小键盘 `Enter`：触发当前按钮。
+- 弹窗确认：`Enter`。
+- 弹窗取消：`Esc`。
+
+移动端不显示键盘提示，使用指针拖拽控制移动。
+
+## 技术架构
+
+```text
+packages/
+  client/    Vite + Three.js + TypeScript，输入、场景、模型、HUD 和菜单
+  shared/    纯 TypeScript 模拟、预制件定义、协议类型和测试
+  server/    Fastify 信令服务骨架，当前不承载游戏逻辑
+assets/
+  kits/      Kenney 城市、车辆和人物素材
+docs/        Phase 笔记和素材清单
+```
+
+核心约束：
+
+- `packages/shared/simulation` 不依赖 `window`、`document`、WebRTC 或 Node API。
+- 单机模式由本地权威循环调用共享模拟；客户端只负责输入采集和渲染。
+- 联机模式的输入包不携带位置或分数，状态由 host 计算并广播。
+- `packages/shared/protocol` 是客户端和服务端共享的协议类型唯一来源。
+- 静态地图物体不创建 Cannon 刚体，只有活跃吞噬物体进入物理模拟。
+- TypeScript 使用 strict 模式；修改玩法、协议或界面流程时必须同步更新 `SPEC.md`。
+
+## 素材
+
+运行时使用本地 Kenney CC0 素材包：
+
+- Kenney Car Kit
+- Kenney City Kit (Suburban)
+- Kenney City Kit (Commercial)
+- Kenney Blocky Characters 2.0
+
+素材文件位于 [`assets/kits`](./assets/kits)，模型用途、尺寸策略和许可信息见 [`docs/asset-inventory.md`](./docs/asset-inventory.md)。
+
+## 测试覆盖
+
+共享模拟测试覆盖以下关键行为：
+
+- 空间哈希候选查询和无重叠布局。
+- 洞口接触、洞缘承托、下落、吞噬和计分时机。
+- 洞移开后的物体复位和路线恢复。
+- 车辆与行人的定向路线、车辆间距和长期运行边界。
+- Bot 目标稳定性、地图边界和实际得分。
+- 玩家吞噬、一次复活、无敌时间和第二次出局。
+- 全部运行时预制件至少在地图中出现一次。
+
+## 开发文档
+
+- [`AGENTS.md`](./AGENTS.md)：工程规则、目录约定和架构边界。
+- [`SPEC.md`](./SPEC.md)：当前需求和玩法参数的唯一真源。
+- [`docs/phase-0-notes.md`](./docs/phase-0-notes.md)：Phase 0 实现记录。
+- [`docs/phase-1-notes.md`](./docs/phase-1-notes.md)：Phase 1 实现记录和已知问题。
+- [`docs/asset-inventory.md`](./docs/asset-inventory.md)：本地模型清单和素材许可。
+
+## 已知限制
+
+- 地图仍由共享模块中的程序化布局代码生成，地图编辑器尚未接入。
+- 完整 WebRTC 对局、TURN、存档和数据库不属于当前默认可玩流程。
+- Host 权威的联机架构存在结构性信任限制，详见 `AGENTS.md` 第 8 节。
+- 移动端专项性能和触控体验优化仍属于后续阶段。
