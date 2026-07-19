@@ -374,10 +374,10 @@ button {
   right: 20px;
   left: 20px;
   display: grid;
-  grid-template-columns: minmax(150px, 210px) 180px minmax(210px, 260px);
+  grid-template-columns: 44px minmax(150px, 210px) 180px minmax(210px, 260px);
   align-items: start;
-  justify-content: space-between;
-  gap: 20px;
+  justify-content: start;
+  gap: 16px;
 }
 
 .score-readout,
@@ -387,6 +387,43 @@ button {
   background: var(--ink-soft);
   box-shadow: 0 8px 22px rgb(17 25 27 / 24%);
   backdrop-filter: blur(9px);
+}
+
+.home-command {
+  pointer-events: auto;
+  grid-column: 1;
+  width: 44px;
+  min-height: 42px;
+  align-self: start;
+  padding: 0 5px;
+  color: var(--paper);
+  border: 1px solid var(--line);
+  background: var(--ink-soft);
+  font-family: "Courier New", monospace;
+  font-size: 13px;
+  font-weight: 900;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.score-readout {
+  grid-column: 2;
+}
+
+.time-readout {
+  grid-column: 3;
+}
+
+.ranking-panel {
+  grid-column: 4;
+}
+
+.home-command:hover,
+.home-command:focus-visible {
+  color: var(--ink);
+  border-color: var(--yellow);
+  background: var(--yellow);
+  outline: none;
 }
 
 .score-readout {
@@ -1024,10 +1061,12 @@ button {
     top: 10px;
     right: 10px;
     left: 10px;
-    grid-template-columns: 130px 126px;
+    grid-template-columns: 40px minmax(110px, 130px) minmax(108px, 126px);
+    gap: 8px;
   }
 
   .score-readout {
+    grid-column: 2;
     min-height: 58px;
     padding: 8px 10px;
   }
@@ -1042,11 +1081,13 @@ button {
   }
 
   .time-readout {
+    grid-column: 3;
     min-width: 126px;
     padding: 6px 8px;
   }
 
   .ranking-panel {
+    grid-column: auto;
     position: absolute;
     top: 64px;
     right: 0;

@@ -69,6 +69,8 @@ const ui: GameUi = {
   gameOver: requireElement("#game-over"),
   finalScore: requireElement("#final-score"),
   restart: requireElement<HTMLButtonElement>("#restart"),
+  returnHomeMatch: requireElement<HTMLButtonElement>("#return-home-match"),
+  returnHomeResults: requireElement<HTMLButtonElement>("#return-home-results"),
   loading: requireElement("#loading"),
   loadingBar: requireElement("#loading-bar"),
   loadingStatus: requireElement("#loading-status"),

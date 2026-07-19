@@ -50,6 +50,8 @@ export interface GameUi {
   gameOver: HTMLElement;
   finalScore: HTMLElement;
   restart: HTMLButtonElement;
+  returnHomeMatch: HTMLButtonElement;
+  returnHomeResults: HTMLButtonElement;
   loading: HTMLElement;
   loadingBar: HTMLElement;
   loadingStatus: HTMLElement;
@@ -98,6 +100,8 @@ export class Game {
   #accumulator = 0;
   #hudAccumulator = 0;
   #matchStarted = false;
+  #pageVisible = document.visibilityState !== "hidden";
+  #sceneDirty = true;
   #preferences: GamePreferences;
 
   private constructor(
@@ -131,7 +135,10 @@ export class Game {
     window.addEventListener("resize", this.#resize);
     window.addEventListener("keydown", this.#onShortcut);
     ui.restart.addEventListener("click", this.#restart);
+    ui.returnHomeMatch.addEventListener("click", this.#returnHome);
+    ui.returnHomeResults.addEventListener("click", this.#returnHome);
     ui.startMatch.addEventListener("click", this.#startMatch);
+    document.addEventListener("visibilitychange", this.#onVisibilityChange);
   }
 
   static async create(
@@ -156,7 +163,7 @@ export class Game {
 
   start(): void {
     this.#lastTime = performance.now();
-    this.#renderer.setAnimationLoop(this.#frame);
+    this.#frame(this.#lastTime);
   }
 
   dispose(): void {
@@ -164,7 +171,10 @@ export class Game {
     window.removeEventListener("resize", this.#resize);
     window.removeEventListener("keydown", this.#onShortcut);
     this.#ui.restart.removeEventListener("click", this.#restart);
+    this.#ui.returnHomeMatch.removeEventListener("click", this.#returnHome);
+    this.#ui.returnHomeResults.removeEventListener("click", this.#returnHome);
     this.#ui.startMatch.removeEventListener("click", this.#startMatch);
+    document.removeEventListener("visibilitychange", this.#onVisibilityChange);
     this.#input.dispose();
     this.#feedback.dispose();
     this.#cityObjects.dispose();
@@ -185,6 +195,9 @@ export class Game {
   }
 
   readonly #frame = (time: number): void => {
+    if (!this.#pageVisible) {
+      return;
+    }
     const frameSeconds = Math.min((time - this.#lastTime) / 1000, MAX_FRAME_SECONDS);
     this.#lastTime = time;
     this.#accumulator += frameSeconds;
@@ -208,9 +221,16 @@ export class Game {
       this.#updateHud();
       this.#hudAccumulator = 0;
     }
-    this.#syncScene(frameSeconds);
+    if (this.#matchStarted || this.#sceneDirty) {
+      this.#syncScene(frameSeconds);
+      this.#sceneDirty = false;
+    }
     this.#renderer.clear(true, true, true);
     this.#renderer.render(this.#scene, this.#camera);
+    if (this.#state.status === "finished" && this.#matchStarted) {
+      this.#matchStarted = false;
+      this.#renderer.setAnimationLoop(null);
+    }
   };
 
   #buildScene(): void {
@@ -685,22 +705,44 @@ export class Game {
   }
 
   readonly #restart = (): void => {
+    this.#resetSimulation();
+    this.#matchStarted = true;
+    this.#renderer.setAnimationLoop(this.#frame);
+    this.#ui.launchScreen.hidden = true;
+    this.#ui.launchScreen.parentElement?.classList.remove("is-menu");
+    this.#ui.gameOver.hidden = true;
+    this.#sceneDirty = true;
+    this.#syncScene(1);
+    this.#sceneDirty = false;
+    this.#updateHud();
+  };
+
+  readonly #returnHome = (): void => {
+    this.#resetSimulation();
+    this.#matchStarted = false;
+    this.#renderer.setAnimationLoop(null);
+    this.#input.reset();
+    this.#ui.gameOver.hidden = true;
+    this.#ui.launchScreen.hidden = false;
+    this.#ui.launchScreen.parentElement?.classList.add("is-menu");
+    this.#ui.startMatch.focus();
+  };
+
+  #resetSimulation(): void {
     const spawnSeed = (crypto.getRandomValues(new Uint32Array(1))[0] ?? Date.now()) >>> 0;
     this.#state = createInitialSimulation(0x5eed1234, spawnSeed);
     this.#accumulator = 0;
     this.#hudAccumulator = 0;
-    this.#matchStarted = true;
-    this.#ui.launchScreen.hidden = true;
-    this.#ui.launchScreen.parentElement?.classList.remove("is-menu");
-    this.#ui.gameOver.hidden = true;
+    this.#ui.scoreEffects.replaceChildren();
     this.#cityObjects.sync(this.#state.objects);
     this.#syncScene(1);
     this.#updateHud();
-  };
+  }
 
   readonly #startMatch = (): void => {
     this.#feedback.activate();
     this.#matchStarted = true;
+    this.#renderer.setAnimationLoop(this.#frame);
     this.#ui.launchScreen.hidden = true;
     this.#ui.launchScreen.parentElement?.classList.remove("is-menu");
     this.#lastTime = performance.now();
@@ -713,6 +755,22 @@ export class Game {
     if (this.#state.status === "finished" && event.code === "KeyR") {
       event.preventDefault();
       this.#restart();
+    }
+  };
+
+  readonly #onVisibilityChange = (): void => {
+    this.#pageVisible = document.visibilityState !== "hidden";
+    if (this.#pageVisible) {
+      this.#lastTime = performance.now();
+      this.#sceneDirty = true;
+      if (this.#matchStarted) {
+        this.#renderer.setAnimationLoop(this.#frame);
+      } else {
+        this.#frame(this.#lastTime);
+      }
+    } else {
+      this.#renderer.setAnimationLoop(null);
+      this.#input.reset();
     }
   };
 
