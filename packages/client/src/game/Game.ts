@@ -1,9 +1,16 @@
 import {
-  MAP_HALF_SIZE,
+  BOMB_COOLDOWN_SECONDS,
   INITIAL_HOLE_RADIUS,
-  ROAD_CENTERS,
+  MAP_HALF_HEIGHT,
+  MAP_HALF_WIDTH,
+  MAP_HEIGHT,
+  MAP_WIDTH,
+  RADIUS_BOOST_COOLDOWN_SECONDS,
+  ROAD_X_CENTERS,
+  ROAD_Y_CENTERS,
   ROAD_WIDTH,
   SIDEWALK_WIDTH,
+  SPEED_BOOST_COOLDOWN_SECONDS,
   createInitialSimulation,
   getHoleProgress,
   stepSimulation,
@@ -14,6 +21,8 @@ import {
 } from "@hole-io/shared/simulation";
 import * as THREE from "three";
 
+import type { MatchResult } from "../app/matchResult";
+import type { GamePreferences } from "../app/preferences";
 import { CityObjectRenderer } from "./CityObjectRenderer";
 import { Feedback } from "./Feedback";
 import { InputController } from "./InputController";
@@ -34,11 +43,6 @@ interface HoleVisual {
   bombRing: THREE.Mesh;
 }
 
-export interface GamePreferences {
-  playerName: string;
-  playerRingColor: string;
-}
-
 export interface GameUi {
   score: HTMLElement;
   radius: HTMLElement;
@@ -47,20 +51,11 @@ export interface GameUi {
   growthFill: HTMLElement;
   time: HTMLElement;
   rankingRows: readonly [RankingRowUi, RankingRowUi, RankingRowUi];
-  finalRank: HTMLElement;
-  finalRankingRows: readonly [RankingRowUi, RankingRowUi, RankingRowUi];
   dragPad: HTMLElement;
   dragKnob: HTMLElement;
-  gameOver: HTMLElement;
-  finalScore: HTMLElement;
-  restart: HTMLButtonElement;
-  returnHomeMatch: HTMLButtonElement;
-  returnHomeResults: HTMLButtonElement;
   loading: HTMLElement;
   loadingBar: HTMLElement;
   loadingStatus: HTMLElement;
-  launchScreen: HTMLElement;
-  startMatch: HTMLButtonElement;
   scoreEffects: HTMLElement;
   opponentIndicators: readonly [OpponentIndicatorUi, OpponentIndicatorUi];
   abilityButtons: readonly [AbilityButtonUi, AbilityButtonUi, AbilityButtonUi];
@@ -114,7 +109,8 @@ export class Game {
   #matchStarted = false;
   #pageVisible = document.visibilityState !== "hidden";
   #sceneDirty = true;
-  #preferences: GamePreferences;
+  readonly #preferences: GamePreferences;
+  readonly #onMatchEnd: (result: MatchResult) => void;
   readonly #pendingAbilities = new Set<AbilityId>();
   #abilityFeedbackTimer: number | null = null;
   #lastBombFuseRemaining = 0;
@@ -124,10 +120,12 @@ export class Game {
     ui: GameUi,
     preferences: GamePreferences,
     initialState: SimulationState,
+    onMatchEnd: (result: MatchResult) => void,
   ) {
     this.#canvas = canvas;
     this.#ui = ui;
     this.#preferences = preferences;
+    this.#onMatchEnd = onMatchEnd;
     this.#state = initialState;
     this.#renderer = new THREE.WebGLRenderer({
       canvas,
@@ -135,7 +133,7 @@ export class Game {
       powerPreference: "high-performance",
       stencil: true,
     });
-    this.#renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+    this.#renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25));
     this.#renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.#renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.#renderer.toneMappingExposure = 1.05;
@@ -149,13 +147,9 @@ export class Game {
     this.#updateHud();
     window.addEventListener("resize", this.#resize);
     window.addEventListener("keydown", this.#onShortcut);
-    ui.restart.addEventListener("click", this.#restart);
-    ui.returnHomeMatch.addEventListener("click", this.#returnHome);
-    ui.returnHomeResults.addEventListener("click", this.#returnHome);
-    ui.startMatch.addEventListener("click", this.#startMatch);
-    ui.abilityButtons[0].root.addEventListener("click", () => this.#requestAbility("speed"));
-    ui.abilityButtons[1].root.addEventListener("click", () => this.#requestAbility("radius"));
-    ui.abilityButtons[2].root.addEventListener("click", () => this.#requestAbility("bomb"));
+    ui.abilityButtons[0].root.addEventListener("click", this.#activateSpeed);
+    ui.abilityButtons[1].root.addEventListener("click", this.#activateRadius);
+    ui.abilityButtons[2].root.addEventListener("click", this.#activateBomb);
     document.addEventListener("visibilitychange", this.#onVisibilityChange);
   }
 
@@ -163,25 +157,39 @@ export class Game {
     canvas: HTMLCanvasElement,
     ui: GameUi,
     preferences: GamePreferences,
+    onMatchEnd: (result: MatchResult) => void,
   ): Promise<Game> {
     const mapSeed = 0x5eed1234;
     const spawnSeed = (crypto.getRandomValues(new Uint32Array(1))[0] ?? Date.now()) >>> 0;
-    const game = new Game(canvas, ui, preferences, createInitialSimulation(mapSeed, spawnSeed));
-    await game.#cityObjects.initialize(game.#state.objects, (loaded, total) => {
-      const progress = total === 0 ? 1 : loaded / total;
-      ui.loadingBar.style.transform = `scaleX(${progress})`;
-      ui.loadingStatus.textContent = `${loaded.toString().padStart(2, "0")} / ${total
-        .toString()
-        .padStart(2, "0")}`;
-    });
+    const game = new Game(
+      canvas,
+      ui,
+      preferences,
+      createInitialSimulation(mapSeed, spawnSeed),
+      onMatchEnd,
+    );
+    try {
+      await game.#cityObjects.initialize(game.#state.objects, (loaded, total) => {
+        const progress = total === 0 ? 1 : loaded / total;
+        ui.loadingBar.style.transform = `scaleX(${progress})`;
+        ui.loadingStatus.textContent = `${loaded.toString().padStart(2, "0")} / ${total
+          .toString()
+          .padStart(2, "0")}`;
+      });
+    } catch (error: unknown) {
+      game.dispose();
+      throw error;
+    }
     ui.loading.hidden = true;
     game.#cityObjects.sync(game.#state.objects);
     return game;
   }
 
   start(): void {
+    this.#feedback.activate();
+    this.#matchStarted = true;
     this.#lastTime = performance.now();
-    this.#frame(this.#lastTime);
+    this.#renderer.setAnimationLoop(this.#frame);
   }
 
   dispose(): void {
@@ -191,10 +199,9 @@ export class Game {
     }
     window.removeEventListener("resize", this.#resize);
     window.removeEventListener("keydown", this.#onShortcut);
-    this.#ui.restart.removeEventListener("click", this.#restart);
-    this.#ui.returnHomeMatch.removeEventListener("click", this.#returnHome);
-    this.#ui.returnHomeResults.removeEventListener("click", this.#returnHome);
-    this.#ui.startMatch.removeEventListener("click", this.#startMatch);
+    this.#ui.abilityButtons[0].root.removeEventListener("click", this.#activateSpeed);
+    this.#ui.abilityButtons[1].root.removeEventListener("click", this.#activateRadius);
+    this.#ui.abilityButtons[2].root.removeEventListener("click", this.#activateBomb);
     document.removeEventListener("visibilitychange", this.#onVisibilityChange);
     this.#input.dispose();
     this.#feedback.dispose();
@@ -203,16 +210,6 @@ export class Game {
     this.#materials.forEach((material) => material.dispose());
     this.#textures.forEach((texture) => texture.dispose());
     this.#renderer.dispose();
-  }
-
-  setPreferences(preferences: GamePreferences): void {
-    this.#preferences = preferences;
-    const visual = this.#holeVisuals.get("player");
-    if (visual) {
-      const color = new THREE.Color(preferences.playerRingColor);
-      visual.ringMaterials.forEach((material) => material.color.copy(color));
-    }
-    this.#updateHud();
   }
 
   readonly #frame = (time: number): void => {
@@ -258,6 +255,7 @@ export class Game {
     if (this.#state.status === "finished" && this.#matchStarted) {
       this.#matchStarted = false;
       this.#renderer.setAnimationLoop(null);
+      this.#onMatchEnd(this.#createMatchResult());
     }
   };
 
@@ -267,20 +265,21 @@ export class Game {
     this.#scene.add(new THREE.HemisphereLight(0xe8f7f4, 0x435646, 2.15));
 
     const grass = this.#createGroundMaterial(0x6f9d69);
-    this.#addGroundPlane(MAP_HALF_SIZE * 2, MAP_HALF_SIZE * 2, 0, 0, 0, grass);
+    this.#addGroundPlane(MAP_WIDTH, MAP_HEIGHT, 0, 0, 0, grass);
 
     const sidewalk = this.#createGroundMaterial(0xc9c5b7);
     const asphalt = this.#createGroundMaterial(0x30383c);
     const lane = this.#createGroundMaterial(0xe8d87c, true);
-    const crosswalk = this.#createGroundMaterial(0xece9dc, true);
     const roadAndSidewalkWidth = ROAD_WIDTH + SIDEWALK_WIDTH * 2;
-    for (const center of ROAD_CENTERS) {
-      this.#addGroundPlane(MAP_HALF_SIZE * 2, roadAndSidewalkWidth, 0, center, 0.03, sidewalk);
-      this.#addGroundPlane(MAP_HALF_SIZE * 2, ROAD_WIDTH, 0, center, 0.06, asphalt);
+    for (const center of ROAD_Y_CENTERS) {
+      this.#addGroundPlane(MAP_WIDTH, roadAndSidewalkWidth, 0, center, 0.03, sidewalk);
+      this.#addGroundPlane(MAP_WIDTH, ROAD_WIDTH, 0, center, 0.06, asphalt);
+    }
+    for (const center of ROAD_X_CENTERS) {
       this.#addVerticalRoadSegments(center, roadAndSidewalkWidth, sidewalk, 0.02);
       this.#addVerticalRoadSegments(center, ROAD_WIDTH, asphalt, 0.05);
     }
-    this.#addRoadMarkings(lane, crosswalk);
+    this.#addRoadMarkings(lane);
 
     this.#camera.position.copy(this.#cameraOffset);
     this.#camera.lookAt(0, 0, 0);
@@ -470,8 +469,7 @@ export class Game {
     material: THREE.Material,
     y: number,
   ): void {
-    const edge = MAP_HALF_SIZE;
-    const crossings = [-edge, ...ROAD_CENTERS, edge];
+    const crossings = [-MAP_HALF_HEIGHT, ...ROAD_Y_CENTERS, MAP_HALF_HEIGHT];
     for (let index = 0; index < crossings.length - 1; index += 1) {
       const start = crossings[index];
       const end = crossings[index + 1];
@@ -495,49 +493,31 @@ export class Game {
     }
   }
 
-  #addRoadMarkings(laneMaterial: THREE.Material, crosswalkMaterial: THREE.Material): void {
+  #addRoadMarkings(laneMaterial: THREE.Material): void {
     const verticalDashes: THREE.Vector3[] = [];
     const horizontalDashes: THREE.Vector3[] = [];
-    for (const center of ROAD_CENTERS) {
-      for (let along = -MAP_HALF_SIZE + 3; along <= MAP_HALF_SIZE - 3; along += 7) {
-        const insideIntersection = ROAD_CENTERS.some(
+    for (const center of ROAD_X_CENTERS) {
+      for (let along = -MAP_HALF_HEIGHT + 3; along <= MAP_HALF_HEIGHT - 3; along += 7) {
+        const insideIntersection = ROAD_Y_CENTERS.some(
           (intersection) => Math.abs(along - intersection) < ROAD_WIDTH / 2 + 3,
         );
         if (!insideIntersection) {
           verticalDashes.push(new THREE.Vector3(center, 0.09, along));
+        }
+      }
+    }
+    for (const center of ROAD_Y_CENTERS) {
+      for (let along = -MAP_HALF_WIDTH + 3; along <= MAP_HALF_WIDTH - 3; along += 7) {
+        const insideIntersection = ROAD_X_CENTERS.some(
+          (intersection) => Math.abs(along - intersection) < ROAD_WIDTH / 2 + 3,
+        );
+        if (!insideIntersection) {
           horizontalDashes.push(new THREE.Vector3(along, 0.095, center));
         }
       }
     }
     this.#addGroundInstances(0.14, 3.2, verticalDashes, laneMaterial);
     this.#addGroundInstances(3.2, 0.14, horizontalDashes, laneMaterial);
-
-    const verticalCrosswalks: THREE.Vector3[] = [];
-    const horizontalCrosswalks: THREE.Vector3[] = [];
-    for (const intersectionX of ROAD_CENTERS) {
-      for (const intersectionZ of ROAD_CENTERS) {
-        for (const side of [-1, 1]) {
-          for (let stripe = -2.5; stripe <= 2.5; stripe += 1) {
-            verticalCrosswalks.push(
-              new THREE.Vector3(
-                intersectionX,
-                0.11,
-                intersectionZ + side * (ROAD_WIDTH / 2 + 1.15) + stripe * 0.4,
-              ),
-            );
-            horizontalCrosswalks.push(
-              new THREE.Vector3(
-                intersectionX + side * (ROAD_WIDTH / 2 + 1.15) + stripe * 0.4,
-                0.115,
-                intersectionZ,
-              ),
-            );
-          }
-        }
-      }
-    }
-    this.#addGroundInstances(5.6, 0.24, verticalCrosswalks, crosswalkMaterial);
-    this.#addGroundInstances(0.24, 5.6, horizontalCrosswalks, crosswalkMaterial);
   }
 
   #addGroundInstances(
@@ -717,13 +697,6 @@ export class Game {
       return left.id.localeCompare(right.id);
     });
     this.#writeRankingRows(this.#ui.rankingRows, rankableHoles);
-    this.#writeRankingRows(this.#ui.finalRankingRows, rankableHoles);
-    const playerRank = rankableHoles.findIndex((hole) => hole.id === player.id) + 1;
-    this.#ui.finalRank.textContent = playerRank.toString().padStart(2, "0");
-    if (this.#state.status === "finished") {
-      this.#ui.finalScore.textContent = player.score.toString().padStart(5, "0");
-      this.#ui.gameOver.hidden = false;
-    }
   }
 
   #updateAbilityHud(player: HoleState): void {
@@ -736,9 +709,21 @@ export class Game {
     }
     this.#lastBombFuseRemaining = player.bombFuseRemaining;
     const abilities: readonly [AbilityId, number, number, number, string][] = [
-      ["speed", player.speedBoostRemaining, player.speedBoostCooldown, 20, "READY"],
-      ["radius", player.radiusBoostRemaining, player.radiusBoostCooldown, 60, "READY"],
-      ["bomb", player.bombFuseRemaining, player.bombCooldown, 120, "READY"],
+      [
+        "speed",
+        player.speedBoostRemaining,
+        player.speedBoostCooldown,
+        SPEED_BOOST_COOLDOWN_SECONDS,
+        "READY",
+      ],
+      [
+        "radius",
+        player.radiusBoostRemaining,
+        player.radiusBoostCooldown,
+        RADIUS_BOOST_COOLDOWN_SECONDS,
+        "READY",
+      ],
+      ["bomb", player.bombFuseRemaining, player.bombCooldown, BOMB_COOLDOWN_SECONDS, "READY"],
     ];
     this.#ui.abilityButtons.forEach((button, index) => {
       const entry = abilities[index];
@@ -804,54 +789,37 @@ export class Game {
     this.#ui.scoreEffects.appendChild(popup);
   }
 
-  readonly #restart = (): void => {
-    this.#resetSimulation();
-    this.#matchStarted = true;
-    this.#renderer.setAnimationLoop(this.#frame);
-    this.#ui.launchScreen.hidden = true;
-    this.#ui.launchScreen.parentElement?.classList.remove("is-menu");
-    this.#ui.gameOver.hidden = true;
-    this.#sceneDirty = true;
-    this.#syncScene(1);
-    this.#sceneDirty = false;
-    this.#updateHud();
-  };
-
-  readonly #returnHome = (): void => {
-    this.#resetSimulation();
-    this.#matchStarted = false;
-    this.#renderer.setAnimationLoop(null);
-    this.#input.reset();
-    this.#ui.gameOver.hidden = true;
-    this.#ui.launchScreen.hidden = false;
-    this.#ui.launchScreen.parentElement?.classList.add("is-menu");
-    this.#ui.startMatch.focus();
-  };
-
-  #resetSimulation(): void {
-    const spawnSeed = (crypto.getRandomValues(new Uint32Array(1))[0] ?? Date.now()) >>> 0;
-    this.#state = createInitialSimulation(0x5eed1234, spawnSeed);
-    this.#pendingAbilities.clear();
-    this.#lastBombFuseRemaining = 0;
-    this.#accumulator = 0;
-    this.#hudAccumulator = 0;
-    this.#ui.scoreEffects.replaceChildren();
-    this.#cityObjects.sync(this.#state.objects);
-    this.#syncScene(1);
-    this.#updateHud();
+  #createMatchResult(): MatchResult {
+    const ranking = [...this.#state.holes]
+      .sort((left, right) => {
+        if (right.score !== left.score) return right.score - left.score;
+        if (left.kind !== right.kind) return left.kind === "human" ? -1 : 1;
+        return left.id.localeCompare(right.id);
+      })
+      .map((hole) => ({
+        id: hole.id,
+        name:
+          hole.kind === "human"
+            ? this.#preferences.playerName.toUpperCase()
+            : `BOT ${hole.id.slice(4).padStart(2, "0")}`,
+        score: hole.score,
+        isPlayer: hole.kind === "human",
+        isOut: hole.isOut,
+      }));
+    const playerIndex = ranking.findIndex((entry) => entry.isPlayer);
+    return {
+      playerRank: Math.max(1, playerIndex + 1),
+      playerScore: ranking[playerIndex]?.score ?? 0,
+      ranking,
+    };
   }
 
-  readonly #startMatch = (): void => {
-    this.#feedback.activate();
-    this.#matchStarted = true;
-    this.#renderer.setAnimationLoop(this.#frame);
-    this.#ui.launchScreen.hidden = true;
-    this.#ui.launchScreen.parentElement?.classList.remove("is-menu");
-    this.#lastTime = performance.now();
-  };
+  readonly #activateSpeed = (): void => this.#requestAbility("speed");
+  readonly #activateRadius = (): void => this.#requestAbility("radius");
+  readonly #activateBomb = (): void => this.#requestAbility("bomb");
 
   readonly #onShortcut = (event: KeyboardEvent): void => {
-    if (document.querySelector(".dialog-layer:not([hidden])")) {
+    if (event.ctrlKey || event.metaKey) {
       return;
     }
     const abilityByCode: Partial<Record<string, AbilityId>> = {
@@ -863,11 +831,6 @@ export class Game {
     if (ability && this.#matchStarted && !event.repeat) {
       event.preventDefault();
       this.#requestAbility(ability);
-      return;
-    }
-    if (this.#state.status === "finished" && event.code === "KeyR") {
-      event.preventDefault();
-      this.#restart();
     }
   };
 
@@ -934,6 +897,6 @@ export class Game {
     this.#camera.aspect = width / Math.max(height, 1);
     this.#camera.updateProjectionMatrix();
     this.#renderer.setSize(width, height, false);
-    this.#renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+    this.#renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25));
   };
 }

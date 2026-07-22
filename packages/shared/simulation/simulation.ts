@@ -7,9 +7,11 @@ import {
   BOT_SPEED_MULTIPLIER,
   HOLE_FIT_RATIO,
   INITIAL_HOLE_RADIUS,
-  MAP_HALF_SIZE,
+  MAP_HALF_HEIGHT,
+  MAP_HALF_WIDTH,
   MOVE_SPEED_PER_LEVEL,
-  ROAD_CENTERS,
+  ROAD_X_CENTERS,
+  ROAD_Y_CENTERS,
   ROAD_WIDTH,
   RADIUS_BOOST_COOLDOWN_SECONDS,
   RADIUS_BOOST_DURATION_SECONDS,
@@ -50,11 +52,7 @@ function normalize(vector: Vector2): Vector2 {
 }
 
 function radiusForHole(hole: HoleState, score = hole.score): number {
-  const baseRadius = getHoleProgress(score).radius;
-  if (hole.radiusBoostRemaining > 0) {
-    return baseRadius * 1.25;
-  }
-  return baseRadius;
+  return getHoleProgress(score).radius;
 }
 
 function normalizedHole(hole: HoleState): HoleState {
@@ -93,7 +91,7 @@ function findNearestEdibleObject(
     }
     if (
       Math.hypot(object.position.x - hole.position.x, object.position.y - hole.position.y) >
-      Math.min(BOT_DETECTION_RADIUS, 14)
+      Math.min(BOT_DETECTION_RADIUS, 24)
     ) {
       continue;
     }
@@ -226,7 +224,8 @@ function decideBotInput(
 
 function moveHole(hole: HoleState, direction: Vector2, deltaSeconds: number): HoleState {
   const normalized = normalize(direction);
-  const limit = Math.max(0, MAP_HALF_SIZE - hole.radius);
+  const limitX = Math.max(0, MAP_HALF_WIDTH - hole.radius);
+  const limitY = Math.max(0, MAP_HALF_HEIGHT - hole.radius);
   const levelSpeed = BASE_MOVE_SPEED + getHoleProgress(hole.score).level * MOVE_SPEED_PER_LEVEL;
   const boostMultiplier = hole.speedBoostRemaining > 0 ? 2 : 1;
   const moveSpeed =
@@ -234,8 +233,8 @@ function moveHole(hole: HoleState, direction: Vector2, deltaSeconds: number): Ho
   return {
     ...hole,
     position: {
-      x: clamp(hole.position.x + normalized.x * moveSpeed * deltaSeconds, -limit, limit),
-      y: clamp(hole.position.y + normalized.y * moveSpeed * deltaSeconds, -limit, limit),
+      x: clamp(hole.position.x + normalized.x * moveSpeed * deltaSeconds, -limitX, limitX),
+      y: clamp(hole.position.y + normalized.y * moveSpeed * deltaSeconds, -limitY, limitY),
     },
   };
 }
@@ -266,8 +265,14 @@ function updateAbilityState(
       next.radiusBoostCooldown <= 0 &&
       next.radiusBoostRemaining <= 0
     ) {
+      const promotedScore = getHoleProgress(next.score).nextScore;
+      if (promotedScore === null) {
+        continue;
+      }
       next = {
         ...next,
+        score: promotedScore,
+        radius: getHoleProgress(promotedScore).radius,
         radiusBoostRemaining: RADIUS_BOOST_DURATION_SECONDS,
         radiusBoostCooldown: RADIUS_BOOST_COOLDOWN_SECONDS,
       };
@@ -275,14 +280,7 @@ function updateAbilityState(
       next = { ...next, bombFuseRemaining: BOMB_FUSE_SECONDS, bombCooldown: BOMB_COOLDOWN_SECONDS };
     }
   }
-  const baseRadius = getHoleProgress(next.score).radius;
-  const radius =
-    next.radiusBoostRemaining > 0
-      ? baseRadius * 1.25
-      : hole.radiusBoostRemaining > 0
-        ? baseRadius
-        : hole.radius;
-  return { ...next, radius };
+  return next;
 }
 
 function resolveBombs(
@@ -363,12 +361,13 @@ function findRespawnPosition(
   rngState: number,
 ): readonly [Vector2, number] {
   let nextState = rngState;
-  const limit = MAP_HALF_SIZE - INITIAL_HOLE_RADIUS - 8;
+  const limitX = MAP_HALF_WIDTH - INITIAL_HOLE_RADIUS - 8;
+  const limitY = MAP_HALF_HEIGHT - INITIAL_HOLE_RADIUS - 8;
   for (let attempt = 0; attempt < 96; attempt += 1) {
     const [randomX, stateAfterX] = nextRandom(nextState);
     const [randomY, stateAfterY] = nextRandom(stateAfterX);
     nextState = stateAfterY;
-    const position = { x: (randomX * 2 - 1) * limit, y: (randomY * 2 - 1) * limit };
+    const position = { x: (randomX * 2 - 1) * limitX, y: (randomY * 2 - 1) * limitY };
     const isSafe = holes.every(
       (hole) =>
         hole.id === excludedId ||
@@ -547,7 +546,8 @@ function applyTrafficSignal(
     return next;
   }
   const stopDistance = ROAD_WIDTH / 2 + object.size.y / 2 + 0.8;
-  for (const intersection of ROAD_CENTERS) {
+  const intersections = motion.axis === "x" ? ROAD_X_CENTERS : ROAD_Y_CENTERS;
+  for (const intersection of intersections) {
     const currentDistance = (intersection - current) * motion.direction;
     const nextDistance = (intersection - next) * motion.direction;
     if (Math.abs(currentDistance - stopDistance) < 0.05) {
@@ -725,9 +725,10 @@ export function stepSimulation(
   const safeDelta = Math.min(deltaSeconds, 0.1);
   const inputByPlayer = new Map(inputs.map((input) => [input.playerId, input] as const));
   let rngState = state.rngState;
-  const abilityHoles = state.holes.map((hole) =>
+  const previousAbilityHoles = state.holes.map(normalizedHole);
+  const abilityHoles = previousAbilityHoles.map((hole) =>
     updateAbilityState(
-      normalizedHole(hole),
+      hole,
       hole.eliminationRemaining > 0 || hole.isOut
         ? []
         : (inputByPlayer.get(hole.id)?.abilities ?? []),
@@ -747,7 +748,7 @@ export function stepSimulation(
   });
 
   const holeResolution = resolveHoleConsumption(
-    resolveBombs(abilityHoles, movedHoles),
+    resolveBombs(previousAbilityHoles, movedHoles),
     safeDelta,
     rngState,
   );

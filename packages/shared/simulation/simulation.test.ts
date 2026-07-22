@@ -4,22 +4,45 @@ import { join, relative } from "node:path";
 
 import {
   BASE_MOVE_SPEED,
+  BOMB_COOLDOWN_SECONDS,
   BOT_SPEED_MULTIPLIER,
+  CITY_BUILDING_COUNT,
+  CITY_BLOCK_COLUMNS,
+  CITY_BLOCK_ROWS,
+  CITY_BLOCK_SIZE,
+  CITY_CHARACTER_COUNT,
+  CITY_MOVING_CHARACTER_COUNT,
+  CITY_SMALL_OBJECT_COUNTS,
+  CITY_VEHICLE_COUNT,
   GAME_DURATION_SECONDS,
   INITIAL_HOLE_RADIUS,
-  MAP_HALF_SIZE,
+  MAP_HALF_HEIGHT,
+  MAP_HALF_WIDTH,
+  MAP_HEIGHT,
+  MAP_WIDTH,
   PEDESTRIAN_SPEED,
-  ROAD_CENTERS,
+  RADIUS_BOOST_COOLDOWN_SECONDS,
+  RADIUS_BOOST_DURATION_SECONDS,
+  ROAD_X_CENTERS,
+  ROAD_Y_CENTERS,
   ROAD_WIDTH,
   SCENE_OBJECT_COUNT,
   SIDEWALK_WIDTH,
+  SPEED_BOOST_COOLDOWN_SECONDS,
+  SPEED_BOOST_DURATION_SECONDS,
   VEHICLE_SPEED,
 } from "./constants";
 import { stepSimulation } from "./simulation";
 import { SpatialHash } from "./spatialHash";
-import { HIGHEST_BUILDING_PREFAB_ID, PREFAB_DEFINITIONS } from "./prefabs";
+import {
+  BUILDING_PREFAB_IDS,
+  getPrefabDefinition,
+  HIGHEST_BUILDING_PREFAB_ID,
+  PREFAB_DEFINITIONS,
+} from "./prefabs";
+import { getHoleProgress } from "./progression";
 import type { SimulationState, WorldObjectState } from "./types";
-import { CITY_BLOCK_LAYOUTS, createInitialSimulation } from "./world";
+import { CITY_BLOCK_LAYOUTS, RUNTIME_BUILDING_PREFAB_IDS, createInitialSimulation } from "./world";
 
 function stateWithObject(object: WorldObjectState): SimulationState {
   const initial = createInitialSimulation();
@@ -40,6 +63,7 @@ function boxObject(positionX = 0, size = 0.8, height = 0.8): WorldObjectState {
     size: { x: size, y: size },
     height,
     stackLayers: 1,
+    sizeMultiplier: 1,
     fitDiameter: Math.hypot(size, Math.min(size, height)),
     value: 100,
     status: "static",
@@ -81,8 +105,7 @@ function objectsOverlap(left: WorldObjectState, right: WorldObjectState): boolea
   const [rightHalfX, rightHalfY] = planarHalfExtents(right);
   return (
     Math.abs(left.position.x - right.position.x) < leftHalfX + rightHalfX &&
-    Math.abs(left.position.y - right.position.y) < leftHalfY + rightHalfY &&
-    Math.abs(left.centerY - right.centerY) < (left.height + right.height) / 2
+    Math.abs(left.position.y - right.position.y) < leftHalfY + rightHalfY
   );
 }
 
@@ -242,18 +265,149 @@ describe("physical swallowing", () => {
   });
 });
 
+describe("abilities", () => {
+  it("uses the configured active windows and cooldowns", () => {
+    const initial = createInitialSimulation();
+    const player = initial.holes.find((hole) => hole.id === "player");
+    if (!player) {
+      throw new Error("Player is required");
+    }
+    const result = stepSimulation(
+      { ...initial, holes: [player], objects: [] },
+      [
+        {
+          playerId: player.id,
+          direction: { x: 0, y: 0 },
+          abilities: ["speed", "radius", "bomb"],
+        },
+      ],
+      1 / 60,
+    );
+
+    const activatedPlayer = result.state.holes[0];
+    expect(activatedPlayer?.speedBoostRemaining).toBe(SPEED_BOOST_DURATION_SECONDS);
+    expect(activatedPlayer?.speedBoostCooldown).toBe(SPEED_BOOST_COOLDOWN_SECONDS);
+    expect(activatedPlayer?.radiusBoostRemaining).toBe(RADIUS_BOOST_DURATION_SECONDS);
+    expect(activatedPlayer?.radiusBoostCooldown).toBe(RADIUS_BOOST_COOLDOWN_SECONDS);
+    expect(activatedPlayer?.bombCooldown).toBe(BOMB_COOLDOWN_SECONDS);
+    expect(SPEED_BOOST_DURATION_SECONDS).toBe(5);
+    expect(SPEED_BOOST_COOLDOWN_SECONDS).toBe(15);
+    expect(RADIUS_BOOST_DURATION_SECONDS).toBe(10);
+    expect(RADIUS_BOOST_COOLDOWN_SECONDS).toBe(25);
+    expect(BOMB_COOLDOWN_SECONDS).toBe(45);
+  });
+
+  it("promotes the radius ability to the next permanent growth level", () => {
+    const initial = createInitialSimulation();
+    const player = initial.holes.find((hole) => hole.id === "player");
+    if (!player) {
+      throw new Error("Player is required");
+    }
+    const promoted = stepSimulation(
+      { ...initial, holes: [player], objects: [] },
+      [
+        {
+          playerId: player.id,
+          direction: { x: 0, y: 0 },
+          abilities: ["radius"],
+        },
+      ],
+      1 / 60,
+    ).state;
+    const nextThreshold = getHoleProgress(player.score).nextScore;
+    if (nextThreshold === null) {
+      throw new Error("A next growth level is required");
+    }
+    expect(promoted.holes[0]?.score).toBe(nextThreshold);
+    expect(promoted.holes[0]?.radius).toBe(getHoleProgress(nextThreshold).radius);
+
+    const afterActiveWindow = advance(promoted, RADIUS_BOOST_DURATION_SECONDS * 60 + 1);
+    expect(afterActiveWindow.holes[0]?.radiusBoostRemaining).toBe(0);
+    expect(afterActiveWindow.holes[0]?.score).toBe(nextThreshold);
+    expect(afterActiveWindow.holes[0]?.radius).toBe(getHoleProgress(nextThreshold).radius);
+  });
+
+  it("eliminates enemies when the bomb fuse crosses zero", () => {
+    const initial = createInitialSimulation();
+    const player = initial.holes.find((hole) => hole.id === "player");
+    const revivableBot = initial.holes.find((hole) => hole.id === "bot-1");
+    const finalLifeBot = initial.holes.find((hole) => hole.id === "bot-2");
+    if (!player || !revivableBot || !finalLifeBot) {
+      throw new Error("Player and bots are required");
+    }
+    const result = stepSimulation(
+      {
+        ...initial,
+        holes: [
+          {
+            ...player,
+            position: { x: 0, y: 0 },
+            radius: 2,
+            bombFuseRemaining: 0.05,
+            bombCooldown: BOMB_COOLDOWN_SECONDS,
+          },
+          { ...revivableBot, position: { x: 2, y: 0 } },
+          { ...finalLifeBot, position: { x: 3, y: 0 }, revivesRemaining: 0 },
+        ],
+        objects: [],
+      },
+      [],
+      0.1,
+    );
+
+    const defeatedBot = result.state.holes.find((hole) => hole.id === revivableBot.id);
+    const eliminatedBot = result.state.holes.find((hole) => hole.id === finalLifeBot.id);
+    expect(defeatedBot?.eliminationRemaining).toBeGreaterThan(0);
+    expect(defeatedBot?.revivesRemaining).toBe(0);
+    expect(eliminatedBot?.isOut).toBe(true);
+  });
+
+  it("does not bomb invulnerable or out-of-range enemies", () => {
+    const initial = createInitialSimulation();
+    const player = initial.holes.find((hole) => hole.id === "player");
+    const immuneBot = initial.holes.find((hole) => hole.id === "bot-1");
+    const distantBot = initial.holes.find((hole) => hole.id === "bot-2");
+    if (!player || !immuneBot || !distantBot) {
+      throw new Error("Player and bots are required");
+    }
+    const result = stepSimulation(
+      {
+        ...initial,
+        holes: [
+          {
+            ...player,
+            position: { x: 0, y: 0 },
+            radius: 2,
+            bombFuseRemaining: 0.05,
+            bombCooldown: BOMB_COOLDOWN_SECONDS,
+          },
+          { ...immuneBot, position: { x: 2, y: 0 }, invulnerabilityRemaining: 1 },
+          { ...distantBot, position: { x: 10, y: 0 } },
+        ],
+        objects: [],
+      },
+      [],
+      0.1,
+    );
+
+    expect(result.state.holes.find((hole) => hole.id === immuneBot.id)?.eliminations).toBe(0);
+    expect(result.state.holes.find((hole) => hole.id === distantBot.id)?.eliminations).toBe(0);
+  });
+});
+
 describe("world defaults", () => {
-  it("defines more than eight materially distinct road-interior block layouts", () => {
-    expect(CITY_BLOCK_LAYOUTS.length).toBeGreaterThan(8);
+  it("defines exactly five distinct block layouts with two building-lined edges", () => {
+    expect(CITY_BLOCK_LAYOUTS).toHaveLength(5);
     expect(new Set(CITY_BLOCK_LAYOUTS.map((layout) => layout.id)).size).toBe(
       CITY_BLOCK_LAYOUTS.length,
     );
+    expect(CITY_BLOCK_LAYOUTS.every((layout) => layout.buildingEdges.length === 2)).toBe(true);
     expect(
       new Set(
         CITY_BLOCK_LAYOUTS.map((layout) =>
           JSON.stringify({
-            structures: layout.structures,
-            details: layout.details,
+            buildingEdges: layout.buildingEdges,
+            smallProps: layout.smallProps,
             propOrder: layout.propOrder,
           }),
         ),
@@ -261,7 +415,24 @@ describe("world defaults", () => {
     ).toBe(CITY_BLOCK_LAYOUTS.length);
   });
 
-  it("registers and places every shipped GLB model", () => {
+  it("uses a three-by-four rectangular block grid", () => {
+    expect(ROAD_X_CENTERS).toHaveLength(CITY_BLOCK_COLUMNS + 1);
+    expect(ROAD_Y_CENTERS).toHaveLength(CITY_BLOCK_ROWS + 1);
+    expect(CITY_BLOCK_COLUMNS).toBe(3);
+    expect(CITY_BLOCK_ROWS).toBe(4);
+    for (const roadCenters of [ROAD_X_CENTERS, ROAD_Y_CENTERS]) {
+      for (let index = 0; index < roadCenters.length - 1; index += 1) {
+        const left = roadCenters[index];
+        const right = roadCenters[index + 1];
+        if (left === undefined || right === undefined) continue;
+        expect(right - left - ROAD_WIDTH - SIDEWALK_WIDTH * 2).toBe(CITY_BLOCK_SIZE);
+      }
+    }
+    expect(MAP_WIDTH).toBe(169);
+    expect(MAP_HEIGHT).toBe(220);
+  });
+
+  it("registers every shipped GLB model and identifies the tallest building", () => {
     const assetRoot = join(process.cwd(), "assets", "kits");
     const shippedModels = listGlbAssets(assetRoot)
       .map((path) => relative(assetRoot, path).replaceAll("\\", "/"))
@@ -272,10 +443,29 @@ describe("world defaults", () => {
     expect(shippedModels).toEqual(registeredModels);
     expect(PREFAB_DEFINITIONS).toHaveLength(149);
     expect(HIGHEST_BUILDING_PREFAB_ID).toBe("commercial-skyscraper-d");
-
-    const initial = createInitialSimulation();
-    const placedIds = new Set(initial.objects.map((object) => object.prefabId));
-    expect(PREFAB_DEFINITIONS.every((definition) => placedIds.has(definition.id))).toBe(true);
+    const buildingDefinitions = PREFAB_DEFINITIONS.filter(
+      (definition) =>
+        definition.id.startsWith("building-") || definition.id.startsWith("commercial-"),
+    );
+    const shippedBuildingModels = shippedModels.filter(
+      (path) =>
+        path.startsWith("kenney-city-kit-suburban/models/building-type-") ||
+        path.startsWith("kenney-city-kit-commercial/models/building-") ||
+        path.startsWith("kenney-city-kit-commercial/models/low-detail-building-"),
+    );
+    expect(BUILDING_PREFAB_IDS).toHaveLength(56);
+    expect(
+      buildingDefinitions
+        .map((definition) => definition.assetPath.replace(/^\/kits\//, ""))
+        .toSorted(),
+    ).toEqual(shippedBuildingModels);
+    const maximumHeight = Math.max(...buildingDefinitions.map((definition) => definition.height));
+    expect(maximumHeight).toBe(36);
+    expect(
+      buildingDefinitions
+        .filter((definition) => definition.height === maximumHeight)
+        .map((definition) => definition.id),
+    ).toEqual([HIGHEST_BUILDING_PREFAB_ID]);
   });
 
   it("clamps player movement inside the expanded map", () => {
@@ -286,13 +476,13 @@ describe("world defaults", () => {
     }
     const state = {
       ...initial,
-      holes: [{ ...player, position: { x: MAP_HALF_SIZE - 0.2, y: 0 } }],
+      holes: [{ ...player, position: { x: MAP_HALF_WIDTH - 0.2, y: 0 } }],
       objects: [],
     };
     const result = stepSimulation(state, [{ playerId: "player", direction: { x: 1, y: 0 } }], 0.1);
 
     expect(result.state.holes[0]?.position.x).toBeLessThanOrEqual(
-      MAP_HALF_SIZE - INITIAL_HOLE_RADIUS,
+      MAP_HALF_WIDTH - INITIAL_HOLE_RADIUS,
     );
   });
 
@@ -474,66 +664,186 @@ describe("world defaults", () => {
           (object) =>
             !object.prefabId.startsWith("building-") && !object.prefabId.startsWith("commercial-"),
         )
-        .every((object) => object.value <= 30),
+        .every((object) => object.value <= 40),
     ).toBe(true);
     expect(initial.objects.every((object) => object.centerY >= object.height / 2)).toBe(true);
-    const missingPrefabs = PREFAB_DEFINITIONS.filter(
-      (definition) => !initial.objects.some((object) => object.prefabId === definition.id),
-    ).map((definition) => definition.id);
-    expect(missingPrefabs).toEqual([]);
-    expectNoFootprintOverlap(initial.objects);
+    expect(initial.objects.some((object) => object.prefabId === HIGHEST_BUILDING_PREFAB_ID)).toBe(
+      true,
+    );
     expect(
-      initial.objects.filter(
-        (object) =>
-          object.prefabId.startsWith("building-") || object.prefabId.startsWith("commercial-"),
-      ).length,
-    ).toBeGreaterThanOrEqual(900);
+      initial.objects
+        .filter((object) => object.prefabId === HIGHEST_BUILDING_PREFAB_ID)
+        .every((object) => object.value === 50),
+    ).toBe(true);
+    expect(
+      initial.objects
+        .filter(
+          (object) =>
+            (object.prefabId.startsWith("building-") ||
+              object.prefabId.startsWith("commercial-")) &&
+            object.prefabId !== HIGHEST_BUILDING_PREFAB_ID,
+        )
+        .map((object) => object.value),
+    ).toEqual(expect.arrayContaining([20, 30, 40]));
+    expectNoFootprintOverlap(initial.objects);
+    const buildings = initial.objects.filter(
+      (object) =>
+        object.prefabId.startsWith("building-") || object.prefabId.startsWith("commercial-"),
+    );
+    expect(buildings).toHaveLength(CITY_BUILDING_COUNT);
+    expect(new Set(buildings.map((building) => building.prefabId))).toEqual(
+      new Set(RUNTIME_BUILDING_PREFAB_IDS),
+    );
+    expect(RUNTIME_BUILDING_PREFAB_IDS).toHaveLength(24);
+    for (let leftIndex = 0; leftIndex < buildings.length; leftIndex += 1) {
+      const left = buildings[leftIndex];
+      if (!left) continue;
+      const [leftHalfX, leftHalfY] = planarHalfExtents(left);
+      for (let rightIndex = leftIndex + 1; rightIndex < buildings.length; rightIndex += 1) {
+        const right = buildings[rightIndex];
+        if (!right) continue;
+        const [rightHalfX, rightHalfY] = planarHalfExtents(right);
+        const clearanceX = Math.abs(left.position.x - right.position.x) - leftHalfX - rightHalfX;
+        const clearanceY = Math.abs(left.position.y - right.position.y) - leftHalfY - rightHalfY;
+        expect(
+          Math.max(clearanceX, clearanceY),
+          `building clearance ${left.id}/${right.id}`,
+        ).toBeGreaterThanOrEqual(0.19 - 1e-6);
+      }
+    }
+    expect(
+      buildings.every((building) => Math.abs(building.centerY - building.height / 2) < 0.001),
+    ).toBe(true);
+    const smallObjects = initial.objects.filter(
+      (object) =>
+        !object.prefabId.startsWith("building-") &&
+        !object.prefabId.startsWith("commercial-") &&
+        !object.prefabId.startsWith("character-") &&
+        object.motion?.kind !== "vehicle",
+    );
+    expect(smallObjects).toHaveLength(
+      CITY_SMALL_OBJECT_COUNTS[4] + CITY_SMALL_OBJECT_COUNTS[12] + CITY_SMALL_OBJECT_COUNTS[25],
+    );
+    expect(smallObjects.filter((object) => object.value === 4)).toHaveLength(
+      CITY_SMALL_OBJECT_COUNTS[4],
+    );
+    expect(smallObjects.filter((object) => object.value === 12)).toHaveLength(
+      CITY_SMALL_OBJECT_COUNTS[12],
+    );
+    expect(smallObjects.filter((object) => object.value === 25)).toHaveLength(
+      CITY_SMALL_OBJECT_COUNTS[25],
+    );
+    smallObjects.forEach((object) => {
+      const prefab = getPrefabDefinition(object.prefabId);
+      expect(object.sizeMultiplier).toBe(1);
+      expect(object.size).toEqual(prefab.size);
+      expect(object.height).toBe(prefab.height);
+    });
+    const roadAndSidewalkHalfWidth = ROAD_WIDTH / 2 + SIDEWALK_WIDTH;
+    for (let blockX = 0; blockX < CITY_BLOCK_COLUMNS; blockX += 1) {
+      for (let blockY = 0; blockY < CITY_BLOCK_ROWS; blockY += 1) {
+        const leftRoad = ROAD_X_CENTERS[blockX];
+        const rightRoad = ROAD_X_CENTERS[blockX + 1];
+        const bottomRoad = ROAD_Y_CENTERS[blockY];
+        const topRoad = ROAD_Y_CENTERS[blockY + 1];
+        if (
+          leftRoad === undefined ||
+          rightRoad === undefined ||
+          bottomRoad === undefined ||
+          topRoad === undefined
+        ) {
+          throw new Error("Three-by-four blocks require four-by-five road centers");
+        }
+        const minimumX = leftRoad + roadAndSidewalkHalfWidth;
+        const maximumX = rightRoad - roadAndSidewalkHalfWidth;
+        const minimumY = bottomRoad + roadAndSidewalkHalfWidth;
+        const maximumY = topRoad - roadAndSidewalkHalfWidth;
+        const blockBuildings = buildings.filter(
+          (building) =>
+            building.position.x >= minimumX &&
+            building.position.x <= maximumX &&
+            building.position.y >= minimumY &&
+            building.position.y <= maximumY,
+        );
+        const buildingTypes = new Set(blockBuildings.map((building) => building.prefabId));
+        expect(buildingTypes.size).toBe(6);
+        expect(
+          [...buildingTypes].filter((prefabId) => getPrefabDefinition(prefabId).height >= 12)
+            .length,
+        ).toBeGreaterThanOrEqual(3);
+        const coverage = { north: 0, east: 0, south: 0, west: 0 };
+        for (const building of blockBuildings) {
+          const [halfX, halfY] = planarHalfExtents(building);
+          if (Math.abs(building.position.y + halfY - maximumY) <= 0.21) {
+            coverage.north += halfX * 2;
+          }
+          if (Math.abs(building.position.x + halfX - maximumX) <= 0.21) {
+            coverage.east += halfY * 2;
+          }
+          if (Math.abs(building.position.y - halfY - minimumY) <= 0.21) {
+            coverage.south += halfX * 2;
+          }
+          if (Math.abs(building.position.x - halfX - minimumX) <= 0.21) {
+            coverage.west += halfY * 2;
+          }
+        }
+        expect(
+          Object.values(coverage).filter((value) => value / CITY_BLOCK_SIZE >= 0.9).length,
+          `block ${blockX},${blockY} coverage ${JSON.stringify(coverage)}`,
+        ).toBe(2);
+        const blockProps = smallObjects.filter(
+          (object) =>
+            object.position.x >= minimumX &&
+            object.position.x <= maximumX &&
+            object.position.y >= minimumY &&
+            object.position.y <= maximumY,
+        );
+        expect(blockProps.length).toBeGreaterThanOrEqual(26);
+        const propX = blockProps.map((object) => object.position.x);
+        const propY = blockProps.map((object) => object.position.y);
+        expect(
+          Math.max(...propX) - Math.min(...propX),
+          `block ${blockX},${blockY} prop x span`,
+        ).toBeGreaterThan(CITY_BLOCK_SIZE * 0.5);
+        expect(
+          Math.max(...propY) - Math.min(...propY),
+          `block ${blockX},${blockY} prop y span`,
+        ).toBeGreaterThan(CITY_BLOCK_SIZE * 0.5);
+        const designedObjects = [...blockBuildings, ...blockProps];
+        for (let zoneX = 0; zoneX < 3; zoneX += 1) {
+          for (let zoneY = 0; zoneY < 3; zoneY += 1) {
+            const zoneMinimumX = minimumX + (zoneX / 3) * CITY_BLOCK_SIZE;
+            const zoneMaximumX = minimumX + ((zoneX + 1) / 3) * CITY_BLOCK_SIZE;
+            const zoneMinimumY = minimumY + (zoneY / 3) * CITY_BLOCK_SIZE;
+            const zoneMaximumY = minimumY + ((zoneY + 1) / 3) * CITY_BLOCK_SIZE;
+            expect(
+              designedObjects.some(
+                (object) =>
+                  object.position.x >= zoneMinimumX &&
+                  object.position.x <= zoneMaximumX &&
+                  object.position.y >= zoneMinimumY &&
+                  object.position.y <= zoneMaximumY,
+              ),
+            ).toBe(true);
+          }
+        }
+      }
+    }
     expect(
       initial.objects.filter((object) => object.prefabId.startsWith("character-")),
-    ).toHaveLength(2_772);
+    ).toHaveLength(CITY_CHARACTER_COUNT);
     expect(initial.objects.filter((object) => object.motion?.speed === VEHICLE_SPEED)).toHaveLength(
-      264,
+      CITY_VEHICLE_COUNT,
     );
     expect(
       initial.objects.filter((object) => object.motion?.speed === PEDESTRIAN_SPEED),
-    ).toHaveLength(396);
-    expect(initial.objects.filter((object) => object.motion?.kind === "vehicle")).toHaveLength(264);
-    expect(initial.objects.filter((object) => object.motion?.kind === "pedestrian")).toHaveLength(
-      396,
+    ).toHaveLength(CITY_MOVING_CHARACTER_COUNT);
+    expect(initial.objects.filter((object) => object.motion?.kind === "vehicle")).toHaveLength(
+      CITY_VEHICLE_COUNT,
     );
-    expect(
-      initial.objects.filter((object) => object.prefabId === "planter").length,
-    ).toBeGreaterThanOrEqual(1_600);
-    expect(
-      initial.objects.filter((object) => object.prefabId === "crate").length,
-    ).toBeGreaterThanOrEqual(1_600);
-    expect(
-      initial.objects.filter((object) => object.prefabId.startsWith("debris-plate")).length,
-    ).toBeGreaterThanOrEqual(1_600);
-    const towerGroups = new Map<string, WorldObjectState[]>();
-    initial.objects
-      .filter(
-        (object) =>
-          object.prefabId.startsWith("building-") || object.prefabId.startsWith("commercial-"),
-      )
-      .forEach((building) => {
-        const key = `${building.position.x}:${building.position.y}:${building.prefabId}`;
-        const group = towerGroups.get(key) ?? [];
-        group.push(building);
-        towerGroups.set(key, group);
-      });
-    const towers = [...towerGroups.values()].filter((group) => group.length === 10);
-    expect(towers).toHaveLength(9);
-    expect(
-      new Set(towers.flatMap((tower) => tower.map((building) => building.prefabId))).size,
-    ).toBeGreaterThan(1);
-    towers.forEach((tower) => {
-      const ordered = [...tower].sort((left, right) => left.centerY - right.centerY);
-      ordered.forEach((building, layer) => {
-        expect(building.value).toBe(building.prefabId === "commercial-skyscraper-d" ? 50 : 40);
-        expect(building.centerY).toBeCloseTo(building.height * (layer + 0.5));
-      });
-    });
+    expect(initial.objects.filter((object) => object.motion?.kind === "pedestrian")).toHaveLength(
+      CITY_MOVING_CHARACTER_COUNT,
+    );
 
     const sidewalkCenterOffset = ROAD_WIDTH / 2 + SIDEWALK_WIDTH / 2;
     for (const pedestrian of initial.objects.filter((object) =>
@@ -541,11 +851,11 @@ describe("world defaults", () => {
     )) {
       const motion = pedestrian.motion;
       if (!motion) {
-        const onVerticalSidewalk = ROAD_CENTERS.some(
+        const onVerticalSidewalk = ROAD_X_CENTERS.some(
           (center) =>
             Math.abs(Math.abs(pedestrian.position.x - center) - sidewalkCenterOffset) < 0.001,
         );
-        const onHorizontalSidewalk = ROAD_CENTERS.some(
+        const onHorizontalSidewalk = ROAD_Y_CENTERS.some(
           (center) =>
             Math.abs(Math.abs(pedestrian.position.y - center) - sidewalkCenterOffset) < 0.001,
         );
@@ -554,7 +864,7 @@ describe("world defaults", () => {
       }
       const fixedCoordinate = motion.axis === "y" ? pedestrian.position.x : pedestrian.position.y;
       expect(
-        ROAD_CENTERS.some(
+        (motion.axis === "y" ? ROAD_X_CENTERS : ROAD_Y_CENTERS).some(
           (center) => Math.abs(Math.abs(fixedCoordinate - center) - sidewalkCenterOffset) < 0.001,
         ),
       ).toBe(true);
@@ -573,11 +883,12 @@ describe("world defaults", () => {
       state.holes
         .filter((hole) => hole.kind === "bot")
         .forEach((bot) => {
-          const limit = MAP_HALF_SIZE - bot.radius;
+          const limitX = MAP_HALF_WIDTH - bot.radius;
+          const limitY = MAP_HALF_HEIGHT - bot.radius;
           expect(Number.isFinite(bot.position.x)).toBe(true);
           expect(Number.isFinite(bot.position.y)).toBe(true);
-          expect(Math.abs(bot.position.x)).toBeLessThanOrEqual(limit);
-          expect(Math.abs(bot.position.y)).toBeLessThanOrEqual(limit);
+          expect(Math.abs(bot.position.x)).toBeLessThanOrEqual(limitX);
+          expect(Math.abs(bot.position.y)).toBeLessThanOrEqual(limitY);
         });
     }
     expect(state.holes.filter((hole) => hole.kind === "bot").every((bot) => bot.score > 0)).toBe(
@@ -631,9 +942,10 @@ describe("world defaults", () => {
       state.holes
         .filter((hole) => hole.kind === "bot")
         .forEach((bot) => {
-          const limit = MAP_HALF_SIZE - bot.radius;
-          expect(Math.abs(bot.position.x)).toBeLessThanOrEqual(limit);
-          expect(Math.abs(bot.position.y)).toBeLessThanOrEqual(limit);
+          const limitX = MAP_HALF_WIDTH - bot.radius;
+          const limitY = MAP_HALF_HEIGHT - bot.radius;
+          expect(Math.abs(bot.position.x)).toBeLessThanOrEqual(limitX);
+          expect(Math.abs(bot.position.y)).toBeLessThanOrEqual(limitY);
         });
     }
   }, 20_000);
@@ -678,7 +990,7 @@ describe("world defaults", () => {
     const distantHoleResult = stepSimulation(
       {
         ...initial,
-        holes: [{ ...player, position: { x: 120, y: 120 } }],
+        holes: [{ ...player, position: { x: 100, y: 120 } }],
         objects: [vehicle],
       },
       [],
@@ -759,7 +1071,7 @@ describe("world defaults", () => {
           .map((object) => [object.prefabId, object]),
       ).values(),
     ];
-    expect(vehicles).toHaveLength(25);
+    expect(vehicles).toHaveLength(12);
 
     vehicles.forEach((vehicle) => {
       const result = stepSimulation(
@@ -798,7 +1110,7 @@ describe("world defaults", () => {
     const respawnedBot = result.state.holes.find((hole) => hole.id === "bot-1");
     expect(winner?.score).toBeGreaterThan(40);
     expect(respawnedBot?.score).toBe(20);
-    expect(respawnedBot?.radius).toBeCloseTo(1.978571);
+    expect(respawnedBot?.radius).toBeCloseTo(getHoleProgress(20).radius);
     expect(respawnedBot?.eliminationRemaining).toBeGreaterThan(0);
     expect(respawnedBot?.eliminations).toBe(1);
     expect(respawnedBot?.revivesRemaining).toBe(0);

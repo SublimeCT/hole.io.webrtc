@@ -1,5 +1,4 @@
 import {
-  MAP_HALF_SIZE,
   PREFAB_DEFINITIONS,
   type HoleState,
   type PrefabDefinition,
@@ -45,6 +44,7 @@ export interface CityVisibilityContext {
 
 const SMALL_OBJECT_RENDER_DISTANCE = 150;
 const SMALL_OBJECT_SCORE_THRESHOLD = 10;
+const MODEL_LOAD_CONCURRENCY = 4;
 
 const HIDDEN_MATRIX = new THREE.Matrix4().makeScale(0, 0, 0);
 
@@ -73,8 +73,13 @@ export class CityObjectRenderer {
     objects: readonly WorldObjectState[],
     onProgress: (loaded: number, total: number) => void,
   ): Promise<void> {
-    const usedIds = [...new Set(objects.map((object) => object.prefabId))];
-    const definitions = usedIds.map((id) => {
+    const objectsByPrefab = new Map<string, WorldObjectState[]>();
+    for (const object of objects) {
+      const prefabObjects = objectsByPrefab.get(object.prefabId) ?? [];
+      prefabObjects.push(object);
+      objectsByPrefab.set(object.prefabId, prefabObjects);
+    }
+    const definitions = [...objectsByPrefab.keys()].map((id) => {
       const definition = PREFAB_DEFINITIONS.find((candidate) => candidate.id === id);
       if (!definition) {
         throw new Error(`Missing prefab definition: ${id}`);
@@ -82,12 +87,22 @@ export class CityObjectRenderer {
       return definition;
     });
     let loaded = 0;
-    await Promise.all(
-      definitions.map(async (definition) => {
+    let nextDefinitionIndex = 0;
+    const loadNext = async (): Promise<void> => {
+      while (nextDefinitionIndex < definitions.length) {
+        const definitionIndex = nextDefinitionIndex;
+        nextDefinitionIndex += 1;
+        const definition = definitions[definitionIndex];
+        if (!definition) continue;
         this.#prefabs.set(definition.id, await this.#loadPrefab(definition));
         loaded += 1;
         onProgress(loaded, definitions.length);
-      }),
+      }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(MODEL_LOAD_CONCURRENCY, definitions.length) }, async () =>
+        loadNext(),
+      ),
     );
 
     for (const definition of definitions) {
@@ -95,11 +110,15 @@ export class CityObjectRenderer {
       if (!prefab) {
         continue;
       }
-      const prefabObjects = objects.filter((object) => object.prefabId === definition.id);
+      const prefabObjects = objectsByPrefab.get(definition.id) ?? [];
       const instanceCount = prefabObjects.reduce((total, object) => total + object.stackLayers, 0);
+      const hasDynamicInstances =
+        prefab.animations.length === 0 && prefabObjects.some((object) => object.motion !== null);
       const meshes = prefab.parts.map((part) => {
         const mesh = new THREE.InstancedMesh(part.geometry, part.material, instanceCount);
-        mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+        mesh.instanceMatrix.setUsage(
+          hasDynamicInstances ? THREE.DynamicDrawUsage : THREE.StaticDrawUsage,
+        );
         mesh.name = `instances:${definition.id}`;
         this.#scene.add(mesh);
         return mesh;
@@ -136,10 +155,7 @@ export class CityObjectRenderer {
       });
       meshes.forEach((mesh) => {
         mesh.instanceMatrix.needsUpdate = true;
-        mesh.boundingSphere = new THREE.Sphere(
-          new THREE.Vector3(0, MAP_HALF_SIZE * 0.02, 0),
-          MAP_HALF_SIZE * 1.5,
-        );
+        mesh.computeBoundingSphere();
       });
     }
   }
@@ -394,13 +410,18 @@ export class CityObjectRenderer {
     layer: number,
   ): void {
     const baseHeight = object.height / object.stackLayers;
-    this.#position.set(object.position.x, baseHeight * (layer + 0.5), object.position.y);
+    this.#position.set(
+      object.position.x,
+      object.stackLayers === 1 ? object.centerY : baseHeight * (layer + 0.5),
+      object.position.y,
+    );
     this.#quaternion.set(
       object.rotation.x,
       object.rotation.y,
       object.rotation.z,
       object.rotation.w,
     );
+    this.#scale.setScalar(object.sizeMultiplier);
     this.#worldMatrix.compose(this.#position, this.#quaternion, this.#scale);
     batch.meshes.forEach((mesh, partIndex) => {
       const part = batch.prefab.parts[partIndex];
@@ -453,13 +474,16 @@ export class CityObjectRenderer {
 
   #createStackedModel(prefab: LoadedPrefab, object: WorldObjectState): THREE.Group {
     if (object.stackLayers === 1) {
-      return prefab.template.clone(true);
+      const model = prefab.template.clone(true);
+      model.scale.setScalar(object.sizeMultiplier);
+      return model;
     }
     const model = new THREE.Group();
     const baseHeight = object.height / object.stackLayers;
     for (let layer = 0; layer < object.stackLayers; layer += 1) {
       const floor = prefab.template.clone(true);
       floor.position.y = baseHeight * (layer - (object.stackLayers - 1) / 2);
+      floor.scale.setScalar(object.sizeMultiplier);
       model.add(floor);
     }
     return model;

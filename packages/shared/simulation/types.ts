@@ -76,6 +76,8 @@ export interface WorldObjectState {
   size: Vector2;
   height: number;
   stackLayers: number;
+  /** Uniform scale applied to the prefab's authored dimensions. */
+  sizeMultiplier: number;
   fitDiameter: number;
   value: number;
   status: WorldObjectStatus;

@@ -5,6 +5,7 @@ import {
   Cylinder,
   Plane,
   Quaternion as CannonQuaternion,
+  SAPBroadphase,
   Sphere,
   Vec3,
   World,
@@ -92,7 +93,8 @@ function createBody(object: WorldObjectState): Body {
       object.rotation.w,
     ),
     collisionFilterGroup: ACTIVE_GROUP,
-    collisionFilterMask: GROUND_GROUP,
+    // Simultaneously falling bodies collide so swallowed objects cannot interpenetrate.
+    collisionFilterMask: GROUND_GROUP | ACTIVE_GROUP,
     linearDamping: 0.12,
     angularDamping: 0.16,
     allowSleep: false,
@@ -240,6 +242,7 @@ export function stepActivePhysics(
 
   for (const group of groups) {
     const world = new World();
+    world.broadphase = new SAPBroadphase(world);
     world.gravity.set(0, -GRAVITY_METERS_PER_SECOND_SQUARED, 0);
     world.defaultContactMaterial.friction = 0.78;
     world.defaultContactMaterial.restitution = 0;

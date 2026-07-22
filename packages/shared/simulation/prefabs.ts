@@ -629,6 +629,10 @@ export const PREFAB_DEFINITIONS: readonly PrefabDefinition[] = [
   },
 ] as const;
 
+export const BUILDING_PREFAB_IDS = PREFAB_DEFINITIONS.filter(
+  (definition) => definition.id.startsWith("building-") || definition.id.startsWith("commercial-"),
+).map((definition) => definition.id);
+
 const PREFABS_BY_ID = new Map(PREFAB_DEFINITIONS.map((definition) => [definition.id, definition]));
 
 export function getPrefabDefinition(id: string): PrefabDefinition {
