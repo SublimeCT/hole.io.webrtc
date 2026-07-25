@@ -312,6 +312,7 @@
   width: 36px;
   height: 36px;
   display: block;
+  flex: none;
 }
 
 .home-brand-name {

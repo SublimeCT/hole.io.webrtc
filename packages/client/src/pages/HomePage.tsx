@@ -334,7 +334,12 @@ export function HomePage() {
       <div className="home-wrap">
         <header className="home-topbar">
           <div className="home-brand">
-            <div className="home-brand-mark" />
+            <img
+              className="home-brand-mark"
+              src={`${import.meta.env.BASE_URL}void-mark.svg?v=5`}
+              alt=""
+              aria-hidden="true"
+            />
             <div className="home-brand-name">VOID</div>
           </div>
           <div className="home-top-actions">
