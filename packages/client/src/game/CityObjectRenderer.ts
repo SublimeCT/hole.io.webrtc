@@ -45,6 +45,7 @@ export interface CityVisibilityContext {
 const SMALL_OBJECT_RENDER_DISTANCE = 150;
 const SMALL_OBJECT_SCORE_THRESHOLD = 10;
 const MODEL_LOAD_CONCURRENCY = 4;
+const VISIBILITY_REFRESH_SECONDS = 0.1;
 
 const HIDDEN_MATRIX = new THREE.Matrix4().makeScale(0, 0, 0);
 
@@ -64,6 +65,7 @@ export class CityObjectRenderer {
   readonly #scale = new THREE.Vector3(1, 1, 1);
   readonly #worldMatrix = new THREE.Matrix4();
   readonly #partMatrix = new THREE.Matrix4();
+  #visibilityRefreshElapsed = VISIBILITY_REFRESH_SECONDS;
 
   constructor(scene: THREE.Scene) {
     this.#scene = scene;
@@ -166,6 +168,12 @@ export class CityObjectRenderer {
     visibilityContext: CityVisibilityContext | null = null,
   ): void {
     const touchedMeshes = new Set<THREE.InstancedMesh>();
+    this.#visibilityRefreshElapsed += deltaSeconds;
+    const refreshVisibility =
+      visibilityContext !== null && this.#visibilityRefreshElapsed >= VISIBILITY_REFRESH_SECONDS;
+    if (refreshVisibility) {
+      this.#visibilityRefreshElapsed = 0;
+    }
     for (const object of objects) {
       const instance = this.#instances.get(object.id);
       if (!instance) {
@@ -185,16 +193,19 @@ export class CityObjectRenderer {
         this.#lastStatus.set(object.id, object.status);
         continue;
       }
-      const shouldHideSmallObject =
-        object.status === "static" &&
-        object.motion === null &&
-        visibilityContext !== null &&
-        object.value < SMALL_OBJECT_SCORE_THRESHOLD &&
-        Math.hypot(
-          object.position.x - visibilityContext.player.position.x,
-          object.position.y - visibilityContext.player.position.y,
-        ) > SMALL_OBJECT_RENDER_DISTANCE;
       const wasHiddenSmallObject = this.#hiddenSmallObjectIds.has(object.id);
+      const wasTransparent = this.#transparentObjectIds.has(object.id);
+      const needsVisibilityUpdate = refreshVisibility || previousStatus !== "static";
+      const shouldHideSmallObject = !needsVisibilityUpdate
+        ? wasHiddenSmallObject
+        : object.status === "static" &&
+          object.motion === null &&
+          visibilityContext !== null &&
+          object.value < SMALL_OBJECT_SCORE_THRESHOLD &&
+          Math.hypot(
+            object.position.x - visibilityContext.player.position.x,
+            object.position.y - visibilityContext.player.position.y,
+          ) > SMALL_OBJECT_RENDER_DISTANCE;
       if (shouldHideSmallObject) {
         if (!wasHiddenSmallObject) {
           instance.batch.meshes.forEach((mesh) => {
@@ -213,11 +224,11 @@ export class CityObjectRenderer {
       if (wasHiddenSmallObject) {
         this.#hiddenSmallObjectIds.delete(object.id);
       }
-      const shouldFade =
-        object.status === "static" &&
-        visibilityContext !== null &&
-        this.#shouldFadeBuilding(object, visibilityContext);
-      const wasTransparent = this.#transparentObjectIds.has(object.id);
+      const shouldFade = !needsVisibilityUpdate
+        ? wasTransparent
+        : object.status === "static" &&
+          visibilityContext !== null &&
+          this.#shouldFadeBuilding(object, visibilityContext);
       if (shouldFade) {
         if (!wasTransparent) {
           instance.batch.meshes.forEach((mesh) => {
@@ -232,7 +243,9 @@ export class CityObjectRenderer {
           object,
         );
         transparentModel.visible = true;
-        this.#setGroupTransform(transparentModel, object);
+        if (!wasTransparent || previousStatus !== "static") {
+          this.#setGroupTransform(transparentModel, object);
+        }
         const activeModel = this.#activeModels.get(object.id);
         if (activeModel) {
           activeModel.visible = false;

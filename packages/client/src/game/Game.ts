@@ -100,6 +100,7 @@ export class Game {
   #matchStarted = false;
   #pageVisible = document.visibilityState !== "hidden";
   #sceneDirty = true;
+  readonly #mobileGraphics: boolean;
   readonly #preferences: GamePreferences;
   readonly #onMatchEnd: (result: MatchResult) => void;
   readonly #pendingAbilities = new Set<AbilityId>();
@@ -119,13 +120,14 @@ export class Game {
     this.#preferences = preferences;
     this.#onMatchEnd = onMatchEnd;
     this.#state = initialState;
+    this.#mobileGraphics = window.matchMedia("(pointer: coarse)").matches;
     this.#renderer = new THREE.WebGLRenderer({
       canvas,
-      antialias: true,
+      antialias: !this.#mobileGraphics,
       powerPreference: "high-performance",
       stencil: true,
     });
-    this.#renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25));
+    this.#renderer.setPixelRatio(this.#getPixelRatio());
     this.#renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.#renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.#renderer.toneMappingExposure = 1.05;
@@ -715,6 +717,10 @@ export class Game {
     this.#camera.aspect = width / Math.max(height, 1);
     this.#camera.updateProjectionMatrix();
     this.#renderer.setSize(width, height, false);
-    this.#renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25));
+    this.#renderer.setPixelRatio(this.#getPixelRatio());
   };
+
+  #getPixelRatio(): number {
+    return this.#mobileGraphics ? 1 : Math.min(window.devicePixelRatio, 1.25);
+  }
 }

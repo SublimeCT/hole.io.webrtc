@@ -716,6 +716,28 @@
   }
 }
 
+@media (pointer: coarse) {
+  /* WebGL changes every frame; backdrop sampling it for each HUD panel is costly on mobile GPUs. */
+  .hud-home,
+  .hud-timer,
+  .hud-rank,
+  .direction-tag,
+  .drag-pad {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
+  .hud-home,
+  .hud-timer,
+  .hud-rank {
+    background: oklch(12% 0.022 264 / 0.94);
+  }
+
+  .direction-tag {
+    background: oklch(9% 0.02 264 / 0.94);
+  }
+}
+
 @media (max-width: 680px) {
   .hud-rank {
     padding: 7px;

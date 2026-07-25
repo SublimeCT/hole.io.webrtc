@@ -603,11 +603,13 @@ function vehicleFootprintsOverlap(left: WorldObjectState, right: WorldObjectStat
 
 function enforceVehicleSpacing(objects: readonly WorldObjectState[]): readonly WorldObjectState[] {
   const groups = new Map<string, { index: number; object: WorldObjectState }[]>();
+  const vehicleIndices: number[] = [];
   objects.forEach((object, index) => {
     const motion = object.motion;
     if (object.status !== "static" || !motion || motion.kind !== "vehicle") {
       return;
     }
+    vehicleIndices.push(index);
     const key = motion.laneId;
     const group = groups.get(key) ?? [];
     group.push({ index, object });
@@ -648,7 +650,7 @@ function enforceVehicleSpacing(objects: readonly WorldObjectState[]): readonly W
   }
   for (let pass = 0; pass < 3; pass += 1) {
     const intersectionCells = new Map<string, number[]>();
-    for (let leftIndex = 0; leftIndex < nextObjects.length; leftIndex += 1) {
+    for (const leftIndex of vehicleIndices) {
       const left = nextObjects[leftIndex];
       if (!left?.motion || left.motion.kind !== "vehicle" || left.status !== "static") {
         continue;

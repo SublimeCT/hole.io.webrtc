@@ -1,4 +1,9 @@
-import { BOMB_FUSE_SECONDS, getHoleProgress, type HoleState } from "@hole-io/shared/simulation";
+import {
+  BOMB_FUSE_SECONDS,
+  BOMB_RADIUS_MULTIPLIER,
+  getHoleProgress,
+  type HoleState,
+} from "@hole-io/shared/simulation";
 import * as THREE from "three";
 
 import type { GamePreferences } from "../app/preferences";
@@ -38,8 +43,12 @@ interface HoleVisual {
   lastFuse: number;
   fuseGlow: THREE.Mesh;
   fuseGlowMaterial: THREE.MeshBasicMaterial;
+  bombRange: THREE.Mesh;
+  bombRangeMaterial: THREE.MeshBasicMaterial;
   explosion: THREE.Mesh;
   explosionMaterial: THREE.MeshBasicMaterial;
+  explosionRing: THREE.Mesh;
+  explosionRingMaterial: THREE.MeshBasicMaterial;
   explosionTime: number;
   coreGlow: THREE.Mesh;
   coreGlowMaterial: THREE.MeshBasicMaterial;
@@ -310,7 +319,26 @@ export class HoleRenderer {
     fuseGlow.visible = false;
     group.add(fuseGlow);
 
-    // 07 爆炸闪光（更大的冲击光球）。
+    // 07 引信期间提前标出命中边界。group 按洞半径缩放，因此 2 个局部单位
+    // 恰好对应判定的 2 × 半径，避免视觉范围和权威逻辑脱节。
+    const bombRangeGeometry = new THREE.RingGeometry(0.975, 1, 56);
+    const bombRangeMaterial = new THREE.MeshBasicMaterial({
+      color: 0xff594a,
+      transparent: true,
+      opacity: 0,
+      side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      depthTest: false,
+    });
+    const bombRange = new THREE.Mesh(bombRangeGeometry, bombRangeMaterial);
+    bombRange.rotation.x = -Math.PI / 2;
+    bombRange.position.y = 0.013;
+    bombRange.renderOrder = 5.4;
+    bombRange.visible = false;
+    group.add(bombRange);
+
+    // 07 爆炸冲击光晕，中心快速扩张至命中边界。
     const explosionGeometry = new THREE.CircleGeometry(1, 56);
     const explosionMaterial = new THREE.MeshBasicMaterial({
       color: 0xff9a4a,
@@ -326,6 +354,24 @@ export class HoleRenderer {
     explosion.renderOrder = 5.5;
     explosion.visible = false;
     group.add(explosion);
+
+    // 07 爆炸时固定在命中边界的高亮冲击环。
+    const explosionRingGeometry = new THREE.RingGeometry(0.92, 1, 56);
+    const explosionRingMaterial = new THREE.MeshBasicMaterial({
+      color: 0xffe2a6,
+      transparent: true,
+      opacity: 0,
+      side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      depthTest: false,
+    });
+    const explosionRing = new THREE.Mesh(explosionRingGeometry, explosionRingMaterial);
+    explosionRing.rotation.x = -Math.PI / 2;
+    explosionRing.position.y = 0.016;
+    explosionRing.renderOrder = 5.6;
+    explosionRing.visible = false;
+    group.add(explosionRing);
 
     // 02/升级 黑洞内部闪烁（洞心加色光晕，随升级闪光一起脉冲）。
     const coreGlowGeometry = new THREE.CircleGeometry(0.82, 40);
@@ -363,7 +409,9 @@ export class HoleRenderer {
       flashGeometry,
       bombGeometry,
       fuseGlowGeometry,
+      bombRangeGeometry,
       explosionGeometry,
+      explosionRingGeometry,
       coreGlowGeometry,
     ].forEach((geometry) => this.#geometries.add(geometry));
     [
@@ -375,7 +423,9 @@ export class HoleRenderer {
       flashMaterial,
       bombMaterial,
       fuseGlowMaterial,
+      bombRangeMaterial,
       explosionMaterial,
+      explosionRingMaterial,
       coreGlowMaterial,
     ].forEach((material) => this.#materials.add(material));
 
@@ -404,8 +454,12 @@ export class HoleRenderer {
       lastFuse: 0,
       fuseGlow,
       fuseGlowMaterial,
+      bombRange,
+      bombRangeMaterial,
       explosion,
       explosionMaterial,
+      explosionRing,
+      explosionRingMaterial,
       explosionTime: 0,
       coreGlow,
       coreGlowMaterial,
@@ -556,6 +610,7 @@ export class HoleRenderer {
     if (!visual.isPlayer || fuse <= 0) {
       visual.bombMesh.visible = false;
       visual.fuseGlow.visible = false;
+      visual.bombRange.visible = false;
       if (visual.lastFuse > 0 && fuse <= 0) {
         visual.explosionTime = EXPLOSION_DURATION;
       }
@@ -594,22 +649,38 @@ export class HoleRenderer {
     visual.fuseGlowMaterial.opacity = (0.25 + urgency * 0.5) * flicker;
     const glowScale = 1.05 + Math.sin(elapsed * 14) * 0.03;
     visual.fuseGlow.scale.set(glowScale, glowScale, glowScale);
+    visual.bombRange.visible = true;
+    visual.bombRange.scale.set(
+      BOMB_RADIUS_MULTIPLIER,
+      BOMB_RADIUS_MULTIPLIER,
+      BOMB_RADIUS_MULTIPLIER,
+    );
+    visual.bombRangeMaterial.opacity = (0.18 + urgency * 0.32) * flicker;
     this.#syncExplosion(visual, deltaSeconds);
   }
 
   #syncExplosion(visual: HoleVisual, deltaSeconds: number): void {
     if (visual.explosionTime <= 0) {
       visual.explosion.visible = false;
+      visual.explosionRing.visible = false;
       return;
     }
     visual.explosionTime = Math.max(0, visual.explosionTime - deltaSeconds);
     const t = 1 - visual.explosionTime / EXPLOSION_DURATION;
     visual.explosion.visible = true;
-    // 快速膨胀到 2 倍再淡出，配合冲击光球。
-    const scale = 0.5 + t * 1.9;
-    visual.explosion.scale.set(scale, scale, scale);
-    const fade = t < 0.25 ? t / 0.25 : 1 - (t - 0.25) / 0.75;
-    visual.explosionMaterial.opacity = 0.95 * fade;
+    visual.explosionRing.visible = true;
+    const travel = Math.min(1, t / 0.35);
+    const easedT = 1 - (1 - travel) * (1 - travel) * (1 - travel);
+    const rangeScale = 0.42 + (BOMB_RADIUS_MULTIPLIER - 0.42) * easedT;
+    visual.explosion.scale.set(rangeScale * 0.88, rangeScale * 0.88, rangeScale * 0.88);
+    visual.explosionRing.scale.set(
+      BOMB_RADIUS_MULTIPLIER,
+      BOMB_RADIUS_MULTIPLIER,
+      BOMB_RADIUS_MULTIPLIER,
+    );
+    const fade = 1 - t;
+    visual.explosionMaterial.opacity = 0.86 * fade;
+    visual.explosionRingMaterial.opacity = 0.98 * Math.pow(fade, 0.4);
   }
 
   #syncShield(visual: HoleVisual, hole: HoleState, elapsed: number): void {
