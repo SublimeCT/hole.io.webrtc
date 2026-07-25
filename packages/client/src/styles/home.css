@@ -309,23 +309,9 @@
 }
 
 .home-brand-mark {
-  position: relative;
   width: 36px;
   height: 36px;
-  border-radius: 10px;
-  background: conic-gradient(from 215deg, var(--accent), var(--accent-2), var(--accent));
-  display: grid;
-  place-items: center;
-  box-shadow: 0 0 16px color-mix(in oklch, var(--accent) 45%, transparent);
-}
-
-.home-brand-mark::after {
-  content: "";
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: #000;
-  box-shadow: 0 0 8px 2px var(--accent-2);
+  display: block;
 }
 
 .home-brand-name {
@@ -405,17 +391,8 @@
 }
 
 .home-title {
-  font-family: var(--font-display);
-  font-weight: 900;
-  font-size: clamp(56px, 10vw, 116px);
-  line-height: 0.9;
-  letter-spacing: 0.03em;
+  margin: 0;
   margin-top: 4px;
-}
-
-.home-title-o {
-  color: var(--accent);
-  text-shadow: 0 0 36px color-mix(in oklch, var(--accent) 55%, transparent);
 }
 
 .home-tagline {

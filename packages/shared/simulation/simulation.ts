@@ -3,6 +3,10 @@ import {
   BOMB_COOLDOWN_SECONDS,
   BOMB_FUSE_SECONDS,
   BOMB_RADIUS_MULTIPLIER,
+  BEER_DURATION_SECONDS,
+  DOUBLE_FOOT_INTERVAL_SECONDS,
+  FOOTPRINT_DELAY_SECONDS,
+  FOOTPRINT_MARK_SECONDS,
   BOT_DETECTION_RADIUS,
   BOT_SPEED_MULTIPLIER,
   HOLE_FIT_RATIO,
@@ -10,6 +14,9 @@ import {
   MAP_HALF_HEIGHT,
   MAP_HALF_WIDTH,
   MOVE_SPEED_PER_LEVEL,
+  MAGNET_DURATION_SECONDS,
+  POOP_DURATION_SECONDS,
+  POWER_UP_SPAWN_INTERVAL_SECONDS,
   ROAD_X_CENTERS,
   ROAD_Y_CENTERS,
   ROAD_WIDTH,
@@ -20,22 +27,28 @@ import {
   SPEED_BOOST_DURATION_SECONDS,
 } from "./constants";
 import { stepActivePhysics } from "./physics";
+import { isInsideNormalizedFootprint } from "./footprint";
 import { getHoleProgress } from "./progression";
 import { SpatialHash } from "./spatialHash";
 import type {
   AbilityId,
+  FootprintStrike,
   BotState,
   HoleState,
   PlayerInput,
   SimulationEvent,
   SimulationState,
   SimulationStepResult,
+  PowerUpType,
   Vector2,
   WorldObjectState,
 } from "./types";
 
 const MAX_OBJECT_FOOTPRINT_RADIUS = 7;
-const HOLE_ELIMINATION_MINIMUM_SCORE = 12;
+const PLAYER_CAPTURE_SCORE = 300;
+const BOMB_SCORE_RATIO = 0.1;
+const BOMB_SCORE_CAP = 1_000;
+const BOT_ACTIVE_TARGET_TIMEOUT_SECONDS = 4;
 const HOLE_RESPAWN_SECONDS = 1.8;
 const RESPAWN_INVULNERABILITY_SECONDS = 5;
 
@@ -64,6 +77,8 @@ function normalizedHole(hole: HoleState): HoleState {
     radiusBoostCooldown: hole.radiusBoostCooldown ?? 0,
     bombFuseRemaining: hole.bombFuseRemaining ?? 0,
     bombCooldown: hole.bombCooldown ?? 0,
+    activePowerUps: hole.activePowerUps ?? [],
+    nextPoopDropIn: hole.nextPoopDropIn ?? 0,
   };
 }
 
@@ -111,6 +126,7 @@ interface BotDecision {
   bot: BotState;
   direction: Vector2;
   rngState: number;
+  releasedObjectId: string | null;
 }
 
 function decideBotInput(
@@ -133,6 +149,7 @@ function decideBotInput(
       },
       direction: { x: 0, y: 0 },
       rngState,
+      releasedObjectId: null,
     };
   }
 
@@ -142,6 +159,7 @@ function decideBotInput(
     commitRemaining: Math.max(0, current.commitRemaining - deltaSeconds),
   };
   let nextRngState = rngState;
+  let releasedObjectId: string | null = null;
   const currentTarget = objects.find(
     (object) =>
       object.id === bot.targetObjectId &&
@@ -151,7 +169,23 @@ function decideBotInput(
     currentTarget !== undefined &&
     (currentTarget.status === "active" || canFitThroughHole(hole, currentTarget));
 
-  if (currentTarget?.status === "active") {
+  if (
+    currentTarget?.status === "active" &&
+    currentTarget.activeTime >= BOT_ACTIVE_TARGET_TIMEOUT_SECONDS
+  ) {
+    const [random, updatedRngState] = nextRandom(nextRngState);
+    nextRngState = updatedRngState;
+    releasedObjectId = currentTarget.id;
+    bot = {
+      ...bot,
+      mode: "wander",
+      targetObjectId: null,
+      targetScore: 0,
+      commitRemaining: 1.2,
+      wanderAngle: bot.wanderAngle + Math.PI * (0.65 + random * 0.35),
+      rethinkIn: 0.8,
+    };
+  } else if (currentTarget?.status === "active") {
     bot = { ...bot, mode: "chase", commitRemaining: 4, rethinkIn: 0.5 };
   } else if (
     (bot.mode === "chase" && !targetIsValid) ||
@@ -219,7 +253,7 @@ function decideBotInput(
           y: target.position.y - hole.position.y,
         })
     : { x: Math.cos(bot.wanderAngle), y: Math.sin(bot.wanderAngle) };
-  return { bot, direction, rngState: nextRngState };
+  return { bot, direction, rngState: nextRngState, releasedObjectId };
 }
 
 function moveHole(hole: HoleState, direction: Vector2, deltaSeconds: number): HoleState {
@@ -228,8 +262,11 @@ function moveHole(hole: HoleState, direction: Vector2, deltaSeconds: number): Ho
   const limitY = Math.max(0, MAP_HALF_HEIGHT - hole.radius);
   const levelSpeed = BASE_MOVE_SPEED + getHoleProgress(hole.score).level * MOVE_SPEED_PER_LEVEL;
   const boostMultiplier = hole.speedBoostRemaining > 0 ? 2 : 1;
+  const beerMultiplier = hole.activePowerUps.some((effect) => effect.type === "beer") ? 0.5 : 1;
   const moveSpeed =
-    (hole.kind === "bot" ? levelSpeed * BOT_SPEED_MULTIPLIER : levelSpeed) * boostMultiplier;
+    (hole.kind === "bot" ? levelSpeed * BOT_SPEED_MULTIPLIER : levelSpeed) *
+    boostMultiplier *
+    beerMultiplier;
   return {
     ...hole,
     position: {
@@ -286,8 +323,9 @@ function updateAbilityState(
 function resolveBombs(
   previousHoles: readonly HoleState[],
   holes: readonly HoleState[],
-): readonly HoleState[] {
+): { holes: readonly HoleState[]; events: readonly SimulationEvent[] } {
   const next = holes.map((hole) => ({ ...hole }));
+  const events: SimulationEvent[] = [];
   for (let index = 0; index < next.length; index += 1) {
     const bomber = next[index];
     const previousBomber = previousHoles[index];
@@ -319,19 +357,30 @@ function resolveBombs(
       ) {
         continue;
       }
-      const eliminations = target.eliminations + 1;
-      next[targetIndex] =
-        target.revivesRemaining > 0
-          ? {
-              ...target,
-              eliminationRemaining: HOLE_RESPAWN_SECONDS,
-              eliminations,
-              revivesRemaining: target.revivesRemaining - 1,
-            }
-          : { ...target, isOut: true, eliminations, eliminationRemaining: 0, bot: null };
+      const currentBomber = next[index] ?? bomber;
+      const gainedScore = Math.min(BOMB_SCORE_CAP, Math.round(target.score * BOMB_SCORE_RATIO));
+      const bomberScore = currentBomber.score + gainedScore;
+      next[index] = {
+        ...currentBomber,
+        score: bomberScore,
+        radius: radiusForHole(currentBomber, bomberScore),
+      };
+      next[targetIndex] = {
+        ...target,
+        eliminationRemaining: HOLE_RESPAWN_SECONDS,
+        eliminations: target.eliminations + 1,
+        isOut: false,
+      };
+      events.push({
+        type: "player-defeated",
+        objectId: target.id,
+        holeId: bomber.id,
+        value: gainedScore,
+        position: { ...target.position },
+      });
     }
   }
-  return next;
+  return { holes: next, events };
 }
 
 function isFullyCoveredByHole(
@@ -469,7 +518,7 @@ function resolveHoleConsumption(
       ) {
         continue;
       }
-      const gainedScore = Math.max(HOLE_ELIMINATION_MINIMUM_SCORE, Math.round(loser.score * 0.6));
+      const gainedScore = PLAYER_CAPTURE_SCORE;
       const score = winner.score + gainedScore;
       nextHoles[winnerIndex] = {
         ...winner,
@@ -477,43 +526,185 @@ function resolveHoleConsumption(
         radius: radiusForHole(winner, score),
       };
       const nextEliminations = loser.eliminations + 1;
-      nextHoles[loserIndex] =
-        loser.revivesRemaining > 0
-          ? {
-              ...loser,
-              radius: getHoleProgress(loser.score).radius,
-              eliminationRemaining: HOLE_RESPAWN_SECONDS,
-              eliminations: nextEliminations,
-              revivesRemaining: loser.revivesRemaining - 1,
-              speedBoostRemaining: 0,
-              speedBoostCooldown: 0,
-              radiusBoostRemaining: 0,
-              radiusBoostCooldown: 0,
-              bombFuseRemaining: 0,
-              bombCooldown: 0,
-              bot:
-                loser.kind === "bot"
-                  ? {
-                      mode: "wander",
-                      targetObjectId: null,
-                      targetScore: 0,
-                      commitRemaining: 0,
-                      sectorIndex: 0,
-                      wanderAngle: 0,
-                      rethinkIn: 0.4,
-                    }
-                  : null,
-            }
-          : {
-              ...loser,
-              eliminationRemaining: 0,
-              eliminations: nextEliminations,
-              isOut: true,
-              bot: null,
-            };
+      nextHoles[loserIndex] = {
+        ...loser,
+        radius: getHoleProgress(loser.score).radius,
+        eliminationRemaining: HOLE_RESPAWN_SECONDS,
+        eliminations: nextEliminations,
+        isOut: false,
+        speedBoostRemaining: 0,
+        speedBoostCooldown: 0,
+        radiusBoostRemaining: 0,
+        radiusBoostCooldown: 0,
+        bombFuseRemaining: 0,
+        bombCooldown: 0,
+      };
     }
   }
   return { holes: nextHoles, rngState: nextRngState };
+}
+
+const POWER_UP_TYPES: readonly PowerUpType[] = [
+  "magnet",
+  "shrink",
+  "foot",
+  "burger",
+  "poop",
+  "doubleFoot",
+  "beer",
+];
+
+function addTimedPowerUp(hole: HoleState, type: PowerUpType, remaining: number): HoleState {
+  return {
+    ...hole,
+    activePowerUps: [
+      ...hole.activePowerUps.filter((effect) => effect.type !== type),
+      { type, remaining },
+    ],
+  };
+}
+
+function createFootprints(
+  hole: HoleState,
+  type: "foot" | "doubleFoot",
+  elapsed: number,
+): readonly FootprintStrike[] {
+  const count = type === "doubleFoot" ? 2 : 1;
+  return Array.from({ length: count }, (_, index) => ({
+    id: `footprint-${hole.id}-${Math.round(elapsed * 1_000)}-${index}`,
+    ownerId: hole.id,
+    position: { ...hole.position },
+    width: hole.radius * 3,
+    length: hole.radius * 6,
+    rotation: 0,
+    impactRemaining: FOOTPRINT_DELAY_SECONDS + index * DOUBLE_FOOT_INTERVAL_SECONDS,
+    fadeRemaining: 0,
+  }));
+}
+
+function isInsideFootprint(object: WorldObjectState, footprint: FootprintStrike): boolean {
+  const cosine = Math.cos(-footprint.rotation);
+  const sine = Math.sin(-footprint.rotation);
+  const deltaX = object.position.x - footprint.position.x;
+  const deltaY = object.position.y - footprint.position.y;
+  const localX = deltaX * cosine - deltaY * sine;
+  const localY = deltaX * sine + deltaY * cosine;
+  return isInsideNormalizedFootprint({
+    x: localX / footprint.width,
+    y: localY / footprint.length,
+  });
+}
+
+function positionAt(
+  history: SimulationState["positionHistory"],
+  hole: HoleState,
+  elapsed: number,
+): Vector2 {
+  const sample = [...history]
+    .reverse()
+    .find((entry) => entry.holeId === hole.id && entry.elapsed <= elapsed);
+  return sample ? { ...sample.position } : { ...hole.position };
+}
+
+function updatePowerUpEffects(
+  holes: readonly HoleState[],
+  history: SimulationState["positionHistory"],
+  elapsed: number,
+  deltaSeconds: number,
+): { holes: readonly HoleState[]; hazards: SimulationState["poopHazards"] } {
+  const hazards: Array<SimulationState["poopHazards"][number]> = [];
+  const nextHoles = holes.map((hole) => {
+    const hadPoop = hole.activePowerUps.some((effect) => effect.type === "poop");
+    const activePowerUps = hole.activePowerUps
+      .map((effect) => ({ ...effect, remaining: Math.max(0, effect.remaining - deltaSeconds) }))
+      .filter((effect) => effect.remaining > 0);
+    let nextPoopDropIn = Math.max(0, hole.nextPoopDropIn - deltaSeconds);
+    if (hadPoop && nextPoopDropIn <= 0 && hole.eliminationRemaining <= 0 && !hole.isOut) {
+      hazards.push({
+        id: `poop-${hole.id}-${Math.round(elapsed * 1_000)}`,
+        ownerId: hole.id,
+        position: positionAt(history, hole, elapsed - 2),
+      });
+      nextPoopDropIn = 2;
+    }
+    return { ...hole, activePowerUps, nextPoopDropIn };
+  });
+  return { holes: nextHoles, hazards };
+}
+
+function collectPowerUps(
+  holes: readonly HoleState[],
+  powerUps: SimulationState["powerUps"],
+  objects: readonly WorldObjectState[],
+  elapsed: number,
+): {
+  holes: readonly HoleState[];
+  powerUps: SimulationState["powerUps"];
+  objects: readonly WorldObjectState[];
+  footprints: readonly FootprintStrike[];
+  events: readonly SimulationEvent[];
+} {
+  const nextHoles = holes.map((hole) => ({ ...hole }));
+  let nextObjects = objects;
+  const collected = new Set<string>();
+  const footprints: FootprintStrike[] = [];
+  const events: SimulationEvent[] = [];
+  for (const powerUp of powerUps) {
+    const holeIndex = nextHoles.findIndex(
+      (hole) =>
+        hole.eliminationRemaining <= 0 &&
+        !hole.isOut &&
+        Math.hypot(powerUp.position.x - hole.position.x, powerUp.position.y - hole.position.y) <=
+          hole.radius,
+    );
+    if (holeIndex < 0) continue;
+    const hole = nextHoles[holeIndex];
+    if (!hole) continue;
+    collected.add(powerUp.id);
+    if (powerUp.type === "burger") {
+      const score = hole.score + 400;
+      nextHoles[holeIndex] = { ...hole, score, radius: radiusForHole(hole, score) };
+    } else if (powerUp.type === "shrink") {
+      const range = hole.radius * 5;
+      nextObjects = nextObjects.map((object) =>
+        object.status === "static" &&
+        Math.hypot(object.position.x - hole.position.x, object.position.y - hole.position.y) <=
+          range + Math.hypot(object.size.x, object.size.y) / 2
+          ? {
+              ...object,
+              size: { x: object.size.x * 0.5, y: object.size.y * 0.5 },
+              height: object.height * 0.5,
+              sizeMultiplier: object.sizeMultiplier * 0.5,
+              fitDiameter: object.fitDiameter * 0.5,
+              centerY: object.centerY * 0.5,
+            }
+          : object,
+      );
+      nextHoles[holeIndex] = addTimedPowerUp(hole, powerUp.type, 0.8);
+    } else if (powerUp.type === "foot" || powerUp.type === "doubleFoot") {
+      footprints.push(...createFootprints(hole, powerUp.type, elapsed));
+      nextHoles[holeIndex] = addTimedPowerUp(hole, powerUp.type, powerUp.type === "foot" ? 4 : 9);
+    } else {
+      const duration =
+        powerUp.type === "magnet"
+          ? MAGNET_DURATION_SECONDS
+          : powerUp.type === "poop"
+            ? POOP_DURATION_SECONDS
+            : BEER_DURATION_SECONDS;
+      nextHoles[holeIndex] = {
+        ...addTimedPowerUp(hole, powerUp.type, duration),
+        nextPoopDropIn: powerUp.type === "poop" ? 2 : hole.nextPoopDropIn,
+      };
+    }
+    events.push({ type: "power-up-collected", holeId: hole.id, powerUpType: powerUp.type });
+  }
+  return {
+    holes: nextHoles,
+    powerUps: powerUps.filter((powerUp) => !collected.has(powerUp.id)),
+    objects: nextObjects,
+    footprints,
+    events,
+  };
 }
 
 function wrapRoutePosition(value: number, minimum: number, maximum: number): number {
@@ -727,7 +918,13 @@ export function stepSimulation(
   const safeDelta = Math.min(deltaSeconds, 0.1);
   const inputByPlayer = new Map(inputs.map((input) => [input.playerId, input] as const));
   let rngState = state.rngState;
-  const previousAbilityHoles = state.holes.map(normalizedHole);
+  const timedEffects = updatePowerUpEffects(
+    state.holes.map(normalizedHole),
+    state.positionHistory ?? [],
+    state.elapsed,
+    safeDelta,
+  );
+  const previousAbilityHoles = timedEffects.holes;
   const abilityHoles = previousAbilityHoles.map((hole) =>
     updateAbilityState(
       hole,
@@ -737,6 +934,7 @@ export function stepSimulation(
       safeDelta,
     ),
   );
+  const releasedObjectIds = new Set<string>();
   const movedHoles = abilityHoles.map((hole) => {
     if (hole.eliminationRemaining > 0 || hole.isOut) {
       return hole;
@@ -746,32 +944,146 @@ export function stepSimulation(
     }
     const decision = decideBotInput(hole, state.objects, safeDelta, rngState);
     rngState = decision.rngState;
+    if (decision.releasedObjectId) releasedObjectIds.add(decision.releasedObjectId);
     return moveHole({ ...hole, bot: decision.bot }, decision.direction, safeDelta);
   });
 
-  const holeResolution = resolveHoleConsumption(
-    resolveBombs(previousAbilityHoles, movedHoles),
-    safeDelta,
-    rngState,
-  );
+  const bombResolution = resolveBombs(previousAbilityHoles, movedHoles);
+  const holeResolution = resolveHoleConsumption(bombResolution.holes, safeDelta, rngState);
   const competitiveHoles = holeResolution.holes;
   rngState = holeResolution.rngState;
   const previousStatusById = new Map(state.objects.map((object) => [object.id, object.status]));
   const routedObjects = enforceVehicleSpacing(
-    state.objects.map((object) => moveRoutedObject(object, safeDelta, state.elapsed)),
+    state.objects.map((object) =>
+      moveRoutedObject(
+        releasedObjectIds.has(object.id) ? { ...object, claimedBy: null } : object,
+        safeDelta,
+        state.elapsed,
+      ),
+    ),
   );
-  const objects = [...stepActivePhysics(routedObjects, competitiveHoles, safeDelta)];
+  let objects: WorldObjectState[] = [
+    ...stepActivePhysics(routedObjects, competitiveHoles, safeDelta),
+  ].map((object) => ({
+    ...object,
+    footprintFadeRemaining: Math.max(0, (object.footprintFadeRemaining ?? 0) - safeDelta),
+  }));
   const newlyConsumed = objects.filter(
     (object) => object.status === "consumed" && previousStatusById.get(object.id) === "active",
   );
-  const scoredHoles = applyConsumedScores(competitiveHoles, newlyConsumed);
-  const events: SimulationEvent[] = newlyConsumed.map((object) => ({
-    type: "consumed",
-    objectId: object.id,
-    holeId: object.claimedBy ?? "unknown",
-    value: object.value,
-    position: object.position,
-  }));
+  let scoredHoles = applyConsumedScores(competitiveHoles, newlyConsumed);
+  const events: SimulationEvent[] = [
+    ...bombResolution.events,
+    ...newlyConsumed.map(
+      (object) =>
+        ({
+          type: "consumed",
+          objectId: object.id,
+          holeId: object.claimedBy ?? "unknown",
+          value: object.value,
+          position: object.position,
+        }) as const,
+    ),
+  ];
+
+  let footprints = (state.footprints ?? []).map((footprint) => {
+    if (footprint.impactRemaining <= 0) return { ...footprint };
+    const owner = scoredHoles.find(
+      (hole) => hole.id === footprint.ownerId && hole.eliminationRemaining <= 0 && !hole.isOut,
+    );
+    return owner
+      ? {
+          ...footprint,
+          position: { ...owner.position },
+          width: owner.radius * 3,
+          length: owner.radius * 6,
+        }
+      : { ...footprint };
+  });
+  const impactingFootprints = footprints.filter(
+    (footprint) =>
+      footprint.impactRemaining > 0 && footprint.impactRemaining - safeDelta <= 0.000_001,
+  );
+  footprints = footprints
+    .map((footprint) => ({
+      ...footprint,
+      impactRemaining: Math.max(0, footprint.impactRemaining - safeDelta),
+      fadeRemaining:
+        footprint.impactRemaining > 0 && footprint.impactRemaining - safeDelta <= 0.000_001
+          ? FOOTPRINT_MARK_SECONDS
+          : Math.max(0, footprint.fadeRemaining - safeDelta),
+    }))
+    .filter((footprint) => footprint.impactRemaining > 0 || footprint.fadeRemaining > 0);
+  for (const footprint of impactingFootprints) {
+    const owner = scoredHoles.find((hole) => hole.id === footprint.ownerId);
+    if (!owner) continue;
+    const footprintConsumed: WorldObjectState[] = [];
+    objects = objects.map((object) => {
+      if (object.status === "consumed" || !isInsideFootprint(object, footprint)) return object;
+      const consumed = {
+        ...object,
+        status: "consumed" as const,
+        claimedBy: owner.id,
+        motion: null,
+        footprintFadeRemaining: FOOTPRINT_MARK_SECONDS,
+      };
+      footprintConsumed.push(consumed);
+      return consumed;
+    });
+    scoredHoles = applyConsumedScores(scoredHoles, footprintConsumed);
+    events.push(
+      ...footprintConsumed.map((object) => ({
+        type: "consumed" as const,
+        objectId: object.id,
+        holeId: owner.id,
+        value: object.value,
+        position: object.position,
+      })),
+    );
+  }
+
+  let powerUps = state.powerUps ?? [];
+  let nextPowerUpSpawnAt = state.nextPowerUpSpawnAt ?? POWER_UP_SPAWN_INTERVAL_SECONDS;
+  if (state.elapsed + safeDelta >= nextPowerUpSpawnAt) {
+    const spawned = [];
+    for (let index = 0; index < state.holes.length; index += 1) {
+      const [randomX, afterX] = nextRandom(rngState);
+      const [randomY, afterY] = nextRandom(afterX);
+      const [randomType, afterType] = nextRandom(afterY);
+      rngState = afterType;
+      spawned.push({
+        id: `power-up-${Math.round(nextPowerUpSpawnAt)}-${index}`,
+        type: POWER_UP_TYPES[Math.floor(randomType * POWER_UP_TYPES.length)] ?? "magnet",
+        position: {
+          x: (randomX * 2 - 1) * (MAP_HALF_WIDTH - 4),
+          y: (randomY * 2 - 1) * (MAP_HALF_HEIGHT - 4),
+        },
+      });
+    }
+    powerUps = [...powerUps, ...spawned];
+    nextPowerUpSpawnAt += POWER_UP_SPAWN_INTERVAL_SECONDS;
+  }
+  const collection = collectPowerUps(scoredHoles, powerUps, objects, state.elapsed);
+  scoredHoles = collection.holes;
+  powerUps = collection.powerUps;
+  objects = [...collection.objects];
+  footprints = [...footprints, ...collection.footprints];
+  events.push(...collection.events);
+
+  const poopHazards = [...(state.poopHazards ?? []), ...timedEffects.hazards].filter((hazard) => {
+    for (const hole of scoredHoles) {
+      if (
+        hole.eliminationRemaining <= 0 &&
+        !hole.isOut &&
+        Math.hypot(hazard.position.x - hole.position.x, hazard.position.y - hole.position.y) <=
+          hole.radius
+      ) {
+        events.push({ type: "poop-hit", holeId: hole.id });
+        return false;
+      }
+    }
+    return true;
+  });
 
   const objectIndexById = new Map(objects.map((object, index) => [object.id, index] as const));
   const spatialHash = new SpatialHash(SPATIAL_HASH_CELL_SIZE);
@@ -811,17 +1123,27 @@ export function stepSimulation(
   }
 
   const elapsed = Math.min(state.elapsed + safeDelta, state.elapsed + state.remaining);
+  const positionHistory = [
+    ...(state.positionHistory ?? []).filter((sample) => elapsed - sample.elapsed <= 2.2),
+    ...scoredHoles.map((hole) => ({
+      holeId: hole.id,
+      elapsed,
+      position: { ...hole.position },
+    })),
+  ];
   const remaining = Math.max(0, state.remaining - safeDelta);
   return {
     state: {
       elapsed,
       remaining,
-      status:
-        remaining === 0 || scoredHoles.some((hole) => hole.kind === "human" && hole.isOut)
-          ? "finished"
-          : "playing",
+      status: remaining === 0 ? "finished" : "playing",
       holes: scoredHoles,
       objects,
+      powerUps,
+      footprints,
+      poopHazards,
+      positionHistory,
+      nextPowerUpSpawnAt,
       rngState,
     },
     events,

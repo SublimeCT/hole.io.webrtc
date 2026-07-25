@@ -1,9 +1,11 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { saveMatchResult } from "../app/matchResult";
 import { loadPreferences } from "../app/preferences";
+import { translate } from "../app/i18n";
 import { Game, type AbilityButtonUi, type GameUi } from "../game/Game";
+import { VoidWordmark } from "../ui/VoidWordmark";
 
 function requireElement<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector);
@@ -82,12 +84,18 @@ function collectGameUi(): GameUi {
       },
     ] as readonly [AbilityButtonUi, AbilityButtonUi, AbilityButtonUi],
     abilityFeedback: requireElement("#ability-feedback"),
+    powerUpLayer: requireElement("#power-up-layer"),
   };
 }
 
 export default function GamePage() {
   const navigate = useNavigate();
+  const preferences = loadPreferences();
+  const language = preferences.language;
   const canvas = useRef<HTMLCanvasElement>(null);
+  const [poopRain, setPoopRain] = useState<
+    readonly { id: number; size: number; left: number; delay: number }[]
+  >([]);
 
   useEffect(() => {
     const gameCanvas = canvas.current;
@@ -95,10 +103,26 @@ export default function GamePage() {
     let disposed = false;
     let game: Game | null = null;
 
-    void Game.create(gameCanvas, collectGameUi(), loadPreferences(), (result) => {
-      saveMatchResult(result);
-      navigate("/results", { replace: true });
-    })
+    void Game.create(
+      gameCanvas,
+      collectGameUi(),
+      preferences,
+      (result) => {
+        saveMatchResult(result);
+        navigate("/results", { replace: true });
+      },
+      (playerCount) => {
+        setPoopRain(
+          Array.from({ length: playerCount * 10 }, (_, id) => ({
+            id,
+            size: 60 + Math.random() * 120,
+            left: Math.random() * 100,
+            delay: Math.random() * 0.9,
+          })),
+        );
+        window.setTimeout(() => setPoopRain([]), 3_000);
+      },
+    )
       .then((createdGame) => {
         if (disposed) {
           createdGame.dispose();
@@ -109,7 +133,7 @@ export default function GamePage() {
       })
       .catch((error: unknown) => {
         const status = document.querySelector<HTMLElement>("#loading-status");
-        if (status) status.textContent = "LOAD ERROR";
+        if (status) status.textContent = translate(language, "loadError");
         console.error(error);
       });
 
@@ -117,16 +141,31 @@ export default function GamePage() {
       disposed = true;
       game?.dispose();
     };
-  }, [navigate]);
+  }, [language, navigate]);
 
   return (
     <main className="app-shell">
-      <canvas ref={canvas} className="game-canvas" aria-label="深渊 VOID 游戏场景" />
+      <canvas ref={canvas} className="game-canvas" aria-label={translate(language, "gameScene")} />
+      <div id="power-up-layer" className="power-up-layer" aria-hidden="true" />
+      <div className="poop-rain" aria-hidden="true">
+        {poopRain.map((poop) => (
+          <span
+            key={poop.id}
+            style={{
+              left: `${poop.left}%`,
+              fontSize: `${poop.size}px`,
+              animationDelay: `${poop.delay}s`,
+            }}
+          >
+            💩
+          </span>
+        ))}
+      </div>
 
       <div id="loading" className="loading" role="status" aria-live="polite">
         <div className="loading-content">
-          <span className="kicker">CONNECTING DISTRICT</span>
-          <strong>VOID</strong>
+          <span className="kicker">{translate(language, "connecting")}</span>
+          <VoidWordmark />
           <div className="loading-track">
             <i id="loading-bar" />
           </div>
@@ -136,12 +175,12 @@ export default function GamePage() {
         </div>
       </div>
 
-      <header className="hud-top" aria-label="游戏状态">
+      <header className="hud-top" aria-label={translate(language, "gameStatus")}>
         <button
           className="hud-home"
           type="button"
-          aria-label="返回主页"
-          title="返回主页"
+          aria-label={translate(language, "home")}
+          title={translate(language, "home")}
           onClick={() => navigate("/")}
         >
           <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -149,18 +188,18 @@ export default function GamePage() {
           </svg>
         </button>
 
-        <div id="timer-root" className="hud-timer" aria-label="剩余时间">
+        <div id="timer-root" className="hud-timer" aria-label={translate(language, "remaining")}>
           <span id="time">3:00</span>
         </div>
 
-        <section className="hud-rank" aria-label="实时排名">
+        <section className="hud-rank" aria-label={translate(language, "rankingLive")}>
           <div className="hud-rank-header">
-            <span>实时排名</span>
-            <span>3 人</span>
+            <span>{translate(language, "rankingLive")}</span>
+            <span>{translate(language, "players", { count: 3 })}</span>
           </div>
-          <RankRow id="first" />
-          <RankRow id="second" />
-          <RankRow id="third" />
+          <RankRow id="first" points={translate(language, "points")} />
+          <RankRow id="second" points={translate(language, "points")} />
+          <RankRow id="third" points={translate(language, "points")} />
         </section>
       </header>
 
@@ -175,14 +214,14 @@ export default function GamePage() {
           <kbd>A</kbd>
           <kbd>S</kbd>
           <kbd>D</kbd>
-          <span>移动</span>
+          <span>{translate(language, "move")}</span>
         </div>
         <div className="hud-skills">
           <SkillButton
             id="speed"
             keyName="Q"
-            label="加速"
-            ariaLabel="移速提升，快捷键 Q"
+            label={translate(language, "speed")}
+            ariaLabel={translate(language, "speedAria")}
             icon={
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M5 6l6 6-6 6M12 6l6 6-6 6" />
@@ -192,8 +231,8 @@ export default function GamePage() {
           <SkillButton
             id="radius"
             keyName="E"
-            label="范围"
-            ariaLabel="范围提升，快捷键 E"
+            label={translate(language, "radius")}
+            ariaLabel={translate(language, "radiusAria")}
             icon={
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />
@@ -204,8 +243,8 @@ export default function GamePage() {
           <SkillButton
             id="bomb"
             keyName="R"
-            label="自爆"
-            ariaLabel="自爆炸弹，快捷键 R"
+            label={translate(language, "bomb")}
+            ariaLabel={translate(language, "bombAria")}
             icon={
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M12 2v4M12 18v4M2 12h4M18 12h4M5 5l3 3M19 5l-3 3M5 19l3-3M19 19l-3-3" />
@@ -236,7 +275,7 @@ export default function GamePage() {
   );
 }
 
-function RankRow({ id }: { id: "first" | "second" | "third" }) {
+function RankRow({ id, points }: { id: "first" | "second" | "third"; points: string }) {
   return (
     <div id={`rank-${id}`} className="rank-row">
       <span id={`rank-${id}-position`} className="rank-row-position">
@@ -251,7 +290,7 @@ function RankRow({ id }: { id: "first" | "second" | "third" }) {
       </span>
       <span className="rank-row-score">
         <em id={`rank-${id}-score`}>0</em>
-        <small>分</small>
+        <small>{points}</small>
       </span>
     </div>
   );

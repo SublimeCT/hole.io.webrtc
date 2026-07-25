@@ -3,6 +3,8 @@ import { useNavigate } from "react-router-dom";
 
 import { loadMatchResult, type MatchResult, type MatchResultEntry } from "../app/matchResult";
 import { getHoleProgress } from "@hole-io/shared/simulation";
+import { translate, type Language } from "../app/i18n";
+import { loadPreferences } from "../app/preferences";
 
 const EMPTY_RESULT: MatchResult = {
   playerRank: 1,
@@ -24,8 +26,6 @@ const AVATAR_STYLES: Record<string, CSSProperties> = {
   "bot-2": { background: "linear-gradient(135deg, #5aa9e6, #cfe8fb)" },
 };
 
-const PLACE_LABELS = ["第一名", "第二名", "第三名"];
-
 function formatDuration(seconds: number): string {
   const safe = Math.max(0, Math.floor(seconds));
   const minutes = Math.floor(safe / 60);
@@ -38,16 +38,21 @@ function avatarInitial(name: string): string {
   return trimmed.charAt(0) || "·";
 }
 
-function levelTag(entry: MatchResultEntry): string {
+function levelTag(entry: MatchResultEntry, language: Language): string {
   if (entry.isOut) {
-    return `Lv.${getHoleProgress(entry.score).level + 1} · 已出局`;
+    return translate(language, "levelOut", { level: getHoleProgress(entry.score).level + 1 });
   }
   const progress = getHoleProgress(entry.score);
-  return `Lv.${progress.level + 1} · 半径 ${progress.radius.toFixed(1)}m`;
+  return translate(language, "levelRadius", {
+    level: progress.level + 1,
+    radius: progress.radius.toFixed(1),
+  });
 }
 
 export function ResultsPage() {
   const navigate = useNavigate();
+  const language = loadPreferences().language;
+  const localeNumber = new Intl.NumberFormat(language);
   const result = useMemo(() => loadMatchResult() ?? EMPTY_RESULT, []);
 
   const playerEntry = result.ranking.find((entry) => entry.isPlayer);
@@ -134,9 +139,12 @@ export function ResultsPage() {
 
       <div className="results-wrap">
         <header className={`results-head ${isOut ? "is-out" : "is-win"}`}>
-          <span className="results-head-kicker">{isOut ? "你已出局" : "本局胜利"}</span>
+          <span className="results-head-kicker">
+            {translate(language, isOut ? "eliminated" : "victory")}
+          </span>
           <h1 className="results-head-title">
-            排名 <span className="results-head-rank">#{result.playerRank}</span> / {ranked.length}
+            {translate(language, "rank")}{" "}
+            <span className="results-head-rank">#{result.playerRank}</span> / {ranked.length}
           </h1>
           <p className="results-head-sub">
             {isOut ? (
@@ -146,8 +154,11 @@ export function ResultsPage() {
               </>
             ) : (
               <>
-                用时 <b>{formatDuration(elapsedSeconds)}</b> · 共吞噬 <b>{swallowCount}</b> 个目标 ·{" "}
-                {eliminations} 次阵亡
+                {translate(language, "summary", {
+                  time: formatDuration(elapsedSeconds),
+                  count: swallowCount,
+                  deaths: eliminations,
+                })}
               </>
             )}
           </p>
@@ -156,10 +167,10 @@ export function ResultsPage() {
         <div className="results-body">
           <section className="results-card">
             <h3 className="results-card-title">
-              <span className="results-card-label">最终排名</span>
-              <span>{ranked.length} 人</span>
+              <span className="results-card-label">{translate(language, "finalRanking")}</span>
+              <span>{translate(language, "players", { count: ranked.length })}</span>
             </h3>
-            <ol className="results-leaderboard" aria-label="最终排名">
+            <ol className="results-leaderboard" aria-label={translate(language, "finalRanking")}>
               {ranked.map((entry, index) => (
                 <li
                   key={entry.id}
@@ -179,16 +190,21 @@ export function ResultsPage() {
                   </span>
                   <span className="results-row-name">
                     {entry.name}
-                    {entry.isPlayer && !isOut ? "（你）" : ""}
+                    {entry.isPlayer && !isOut ? ` (${translate(language, "you")})` : ""}
                     <small className="results-row-meta">
                       <span className={`results-row-tag ${entry.isOut ? "is-out" : ""}`}>
-                        {levelTag(entry)}
+                        {levelTag(entry, language)}
                       </span>
                     </small>
                   </span>
                   <span className="results-row-score">
-                    {entry.score.toLocaleString()}
-                    <small className="results-row-place">{PLACE_LABELS[index] ?? ""}</small>
+                    {localeNumber.format(entry.score)}
+                    <small className="results-row-place">
+                      {translate(
+                        language,
+                        index === 0 ? "place1" : index === 1 ? "place2" : "place3",
+                      )}
+                    </small>
                   </span>
                 </li>
               ))}
@@ -197,26 +213,26 @@ export function ResultsPage() {
 
           <section className="results-card">
             <h3 className="results-card-title">
-              <span className="results-card-label">本局数据</span>
+              <span className="results-card-label">{translate(language, "matchData")}</span>
             </h3>
             <div className="results-stats">
               <div className="results-stat">
-                <div className="results-stat-label">最终分数</div>
-                <div className="results-stat-value">{result.playerScore.toLocaleString()}</div>
+                <div className="results-stat-label">{translate(language, "finalScore")}</div>
+                <div className="results-stat-value">{localeNumber.format(result.playerScore)}</div>
               </div>
               <div className="results-stat">
-                <div className="results-stat-label">最大等级</div>
+                <div className="results-stat-label">{translate(language, "maxLevel")}</div>
                 <div className="results-stat-value">
                   Lv.{maxLevel}
                   <small>· {maxLevelRadius.toFixed(1)}m</small>
                 </div>
               </div>
               <div className="results-stat">
-                <div className="results-stat-label">吞噬数</div>
+                <div className="results-stat-label">{translate(language, "swallowed")}</div>
                 <div className="results-stat-value">{swallowCount}</div>
               </div>
               <div className="results-stat">
-                <div className="results-stat-label">阵亡</div>
+                <div className="results-stat-label">{translate(language, "deaths")}</div>
                 <div className="results-stat-value">
                   {eliminations}
                   <small>/{maxRevives}</small>
@@ -235,7 +251,7 @@ export function ResultsPage() {
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M7 4l13 8-13 8z" />
             </svg>
-            重新开始
+            {translate(language, "restart")}
             <span className="results-btn-key">R</span>
           </button>
           <button
@@ -246,11 +262,11 @@ export function ResultsPage() {
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M3 11l9-8 9 8M5 10v10h14V10" />
             </svg>
-            返回主页
+            {translate(language, "home")}
             <span className="results-btn-key">Esc</span>
           </button>
         </div>
-        <p className="results-hint">结算与对局中均可返回主页 · 按 R 立即重开</p>
+        <p className="results-hint">{translate(language, "resultsHint")}</p>
       </div>
     </main>
   );

@@ -2,6 +2,14 @@ import { useEffect, useRef, useState, type FormEvent, type ReactElement } from "
 import { useNavigate } from "react-router-dom";
 
 import { loadPreferences, persistPreferences, type GamePreferences } from "../app/preferences";
+import {
+  applyDocumentLanguage,
+  LANGUAGES,
+  LANGUAGE_NAMES,
+  translate,
+  type Language,
+} from "../app/i18n";
+import { VoidWordmark } from "../ui/VoidWordmark";
 
 const RING_COLORS = [
   "#2bf0ff",
@@ -18,7 +26,7 @@ const RING_COLORS = [
   "#f2f2f2",
 ] as const;
 
-const REPO_URL = "https://github.com/";
+const REPO_URL = "https://github.com/SublimeCT/hole.io.webrtc";
 
 type MenuAction = "start" | "settings" | "share" | "online";
 
@@ -51,6 +59,7 @@ export function HomePage() {
   const [preferences, setPreferences] = useState<GamePreferences>(() => loadPreferences());
   const [draftName, setDraftName] = useState(preferences.playerName);
   const [draftColor, setDraftColor] = useState(preferences.playerRingColor);
+  const [draftLanguage, setDraftLanguage] = useState<Language>(preferences.language);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [focusedMenu, setFocusedMenu] = useState(0);
   const [toastMessage, setToastMessage] = useState("");
@@ -67,8 +76,8 @@ export function HomePage() {
   const buttons: readonly MenuButton[] = [
     {
       action: "start",
-      title: "开始游戏",
-      subtitle: "单机 · 3 人 · 3 分钟 · 1 次复活",
+      title: translate(preferences.language, "start"),
+      subtitle: translate(preferences.language, "startSub"),
       icon: (
         <svg viewBox="0 0 24 24">
           <path d="M7 4l13 8-13 8z" />
@@ -77,8 +86,8 @@ export function HomePage() {
     },
     {
       action: "settings",
-      title: "设置",
-      subtitle: "玩家名称 · 黑洞圆环颜色",
+      title: translate(preferences.language, "settings"),
+      subtitle: translate(preferences.language, "settingsSub"),
       icon: (
         <svg viewBox="0 0 24 24">
           <circle cx="12" cy="12" r="3.2" />
@@ -88,8 +97,8 @@ export function HomePage() {
     },
     {
       action: "share",
-      title: "分享链接",
-      subtitle: "复制本游戏链接给朋友",
+      title: translate(preferences.language, "share"),
+      subtitle: translate(preferences.language, "shareSub"),
       icon: (
         <svg viewBox="0 0 24 24">
           <path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.5 1.5M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.5-1.5" />
@@ -98,8 +107,8 @@ export function HomePage() {
     },
     {
       action: "online",
-      title: "联机",
-      subtitle: "创建 / 加入房间（开发中）",
+      title: translate(preferences.language, "online"),
+      subtitle: translate(preferences.language, "onlineSub"),
       icon: (
         <svg viewBox="0 0 24 24">
           <circle cx="12" cy="12" r="9" />
@@ -251,13 +260,14 @@ export function HomePage() {
       case "settings":
         setDraftName(preferences.playerName);
         setDraftColor(preferences.playerRingColor);
+        setDraftLanguage(preferences.language);
         setSettingsOpen(true);
         return;
       case "share":
         await shareGame();
         return;
       case "online":
-        showToast("联机模式开发中（Phase 3）");
+        showToast(translate(preferences.language, "onlineToast"));
         return;
     }
   };
@@ -267,21 +277,21 @@ export function HomePage() {
     try {
       if (navigator.share) {
         await navigator.share({
-          title: "深渊 VOID",
-          text: "一个 hole.io 风格的吞噬对战小游戏",
+          title: translate(preferences.language, "title"),
+          text: translate(preferences.language, "shareText"),
           url,
         });
-        showToast("已打开分享面板");
+        showToast(translate(preferences.language, "shareOpened"));
       } else {
         await copyGameLink(url);
-        showToast("游戏链接已复制");
+        showToast(translate(preferences.language, "linkCopied"));
       }
     } catch {
       try {
         await copyGameLink(url);
-        showToast("游戏链接已复制");
+        showToast(translate(preferences.language, "linkCopied"));
       } catch {
-        showToast("暂时无法分享链接");
+        showToast(translate(preferences.language, "shareFailed"));
       }
     }
   };
@@ -290,14 +300,19 @@ export function HomePage() {
     event.preventDefault();
     const playerName = draftName.trim();
     if (playerName.length < 1 || playerName.length > 9) {
-      nameInput.current?.setCustomValidity("玩家名称长度需为 1 至 9 个字符");
+      nameInput.current?.setCustomValidity(translate(preferences.language, "nameInvalid"));
       nameInput.current?.reportValidity();
       return;
     }
     nameInput.current?.setCustomValidity("");
-    const nextPreferences = { playerName, playerRingColor: draftColor };
+    const nextPreferences = {
+      playerName,
+      playerRingColor: draftColor,
+      language: draftLanguage,
+    };
     setPreferences(nextPreferences);
     persistPreferences(nextPreferences);
+    applyDocumentLanguage(draftLanguage);
     setSettingsOpen(false);
     menuButtons.current[1]?.focus();
   };
@@ -328,8 +343,8 @@ export function HomePage() {
               href={REPO_URL}
               target="_blank"
               rel="noopener noreferrer"
-              aria-label="GitHub 开源仓库"
-              title="GitHub 开源仓库"
+              aria-label={translate(preferences.language, "github")}
+              title={translate(preferences.language, "github")}
             >
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M12 1C5.92 1 1 5.92 1 12c0 4.86 3.15 8.98 7.52 10.44.55.1.75-.24.75-.53 0-.26-.01-.95-.02-1.86-3.06.66-3.71-1.48-3.71-1.48-.5-1.27-1.22-1.61-1.22-1.61-1-.68.08-.67.08-.67 1.1.08 1.68 1.13 1.68 1.13.98 1.68 2.57 1.2 3.2.92.1-.71.38-1.2.69-1.48-2.44-.28-5.01-1.22-5.01-5.43 0-1.2.43-2.18 1.13-2.95-.11-.28-.49-1.4.11-2.92 0 0 .92-.3 3.02 1.13a10.5 10.5 0 0 1 5.5 0c2.1-1.43 3.02-1.13 3.02-1.13.6 1.52.22 2.64.11 2.92.7.77 1.13 1.75 1.13 2.95 0 4.22-2.57 5.15-5.02 5.42.39.34.74 1.01.74 2.04 0 1.47-.01 2.66-.01 3.02 0 .29.2.64.76.53A11 11 0 0 0 23 12c0-6.08-4.92-11-11-11z" />
@@ -340,14 +355,12 @@ export function HomePage() {
         </header>
 
         <section className="home-main">
-          <span className="home-kicker">深渊吞噬 · 3 人对决</span>
+          <span className="home-kicker">{translate(preferences.language, "kicker")}</span>
           <h1 className="home-title">
-            V<span className="home-title-o">O</span>ID
+            <VoidWordmark />
           </h1>
-          <p className="home-tagline">
-            控制地面上的虚空之洞，吞噬建筑、车辆与对手——3 分钟内，做最大的那一个。
-          </p>
-          <nav className="home-menu" aria-label="主菜单">
+          <p className="home-tagline">{translate(preferences.language, "tagline")}</p>
+          <nav className="home-menu" aria-label={translate(preferences.language, "menu")}>
             {buttons.map((button, index) => (
               <button
                 key={button.action}
@@ -365,28 +378,29 @@ export function HomePage() {
                   <span className="home-mbtn-sub">{button.subtitle}</span>
                 </span>
                 <span className="home-mbtn-enter">
-                  按 <kbd className="home-mbtn-key">Enter</kbd>
+                  {translate(preferences.language, "press")}{" "}
+                  <kbd className="home-mbtn-key">Enter</kbd>
                 </span>
               </button>
             ))}
           </nav>
         </section>
 
-        <aside className="home-livecard" aria-label="深渊实况">
+        <aside className="home-livecard" aria-label={translate(preferences.language, "live")}>
           <div className="home-lc-head">
-            <span className="home-lc-title">深渊实况</span>
+            <span className="home-lc-title">{translate(preferences.language, "live")}</span>
             <span className="home-lc-live">LIVE</span>
           </div>
           <div className="home-lc-row">
-            <span className="home-lc-label">今日已吞噬建筑</span>
+            <span className="home-lc-label">{translate(preferences.language, "buildings")}</span>
             <span className="home-lc-value home-lc-value-accent">{eatCount.toLocaleString()}</span>
           </div>
           <div className="home-lc-row">
-            <span className="home-lc-label">当前在线黑洞</span>
+            <span className="home-lc-label">{translate(preferences.language, "onlineHoles")}</span>
             <span className="home-lc-value">{onlineCount.toLocaleString()}</span>
           </div>
           <div className="home-lc-row">
-            <span className="home-lc-label">你的最佳体积</span>
+            <span className="home-lc-label">{translate(preferences.language, "bestSize")}</span>
             <span className="home-lc-value home-lc-value-gold">
               Lv.9<small>· 12.6m</small>
             </span>
@@ -403,16 +417,16 @@ export function HomePage() {
         <div
           className="home-modal"
           role="dialog"
-          aria-label="设置"
+          aria-label={translate(preferences.language, "settings")}
           onClick={(event) => {
             if (event.target === event.currentTarget) setSettingsOpen(false);
           }}
         >
           <form className="home-modal-sheet" onSubmit={submitSettings}>
-            <h2>设置</h2>
+            <h2>{translate(preferences.language, "settings")}</h2>
             <div className="home-field">
               <label className="home-field-label" htmlFor="player-name">
-                玩家名称（1–9 字）
+                {translate(preferences.language, "playerName")}
               </label>
               <input
                 ref={nameInput}
@@ -429,17 +443,38 @@ export function HomePage() {
                   setDraftName(event.currentTarget.value);
                 }}
               />
-              <div className="home-field-hint">将在对局排名与结算中显示</div>
+              <div className="home-field-hint">
+                {translate(preferences.language, "playerNameHint")}
+              </div>
             </div>
             <div className="home-field">
-              <label className="home-field-label">黑洞圆环颜色（12 款）</label>
+              <label className="home-field-label" htmlFor="interface-language">
+                {translate(preferences.language, "language")}
+              </label>
+              <select
+                id="interface-language"
+                className="home-field-input"
+                value={draftLanguage}
+                onChange={(event) => setDraftLanguage(event.currentTarget.value as Language)}
+              >
+                {LANGUAGES.map((language) => (
+                  <option key={language} value={language}>
+                    {LANGUAGE_NAMES[language]}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="home-field">
+              <label className="home-field-label">
+                {translate(preferences.language, "ringColor")}
+              </label>
               <div className="home-swatches">
                 {RING_COLORS.map((color) => (
                   <button
                     key={color}
                     className={`home-swatch ${draftColor === color ? "is-on" : ""}`}
                     type="button"
-                    aria-label={`圆环颜色 ${color}`}
+                    aria-label={translate(preferences.language, "ringColorAria", { color })}
                     aria-pressed={draftColor === color}
                     style={{ background: color }}
                     onClick={() => setDraftColor(color)}
@@ -449,10 +484,10 @@ export function HomePage() {
             </div>
             <div className="home-modal-actions">
               <button className="home-btn" type="button" onClick={() => setSettingsOpen(false)}>
-                取消 (Esc)
+                {translate(preferences.language, "cancel")} (Esc)
               </button>
               <button className="home-btn home-btn-primary" type="submit">
-                保存 (Enter)
+                {translate(preferences.language, "save")} (Enter)
               </button>
             </div>
           </form>
