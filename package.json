@@ -2,6 +2,14 @@
   "name": "hole-io-webrtc",
   "version": "0.1.0",
   "private": true,
+  "homepage": "https://github.com/SublimeCT/hole.io.webrtc",
+  "bugs": {
+    "url": "https://github.com/SublimeCT/hole.io.webrtc/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SublimeCT/hole.io.webrtc.git"
+  },
   "scripts": {
     "dev": "pnpm --filter @hole-io/client dev",
     "dev:server": "pnpm --filter @hole-io/server dev",

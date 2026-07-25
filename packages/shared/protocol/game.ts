@@ -2,7 +2,16 @@
 // 照 packages/shared/simulation/types.ts 的 HoleState / WorldObjectState 定义，去掉客户端不需要的内部字段。
 // host 权威循环（Phase 3）才使用；信令服务端不引用本文件。
 
-import type { AbilityId, Quaternion, Vector2, Vector3 } from "../simulation/types.js";
+import type {
+  AbilityId,
+  ActivePowerUp,
+  FootprintStrike,
+  MapPowerUp,
+  PoopHazard,
+  Quaternion,
+  Vector2,
+  Vector3,
+} from "../simulation/types.js";
 
 /**
  * 输入包（guest → host，约 30Hz，unreliable channel）。
@@ -39,6 +48,7 @@ export interface PlayerSnapshot {
   speedBoostCooldown?: number;
   radiusBoostCooldown?: number;
   bombCooldown?: number;
+  activePowerUps: readonly ActivePowerUp[];
 }
 
 /** 活跃物体（status="active"，正在下落/倾倒）的位姿快照，照 WorldObjectState 取渲染+插值所需字段。 */
@@ -69,6 +79,9 @@ export interface StateSnapshot {
   activeObjects: readonly ActiveObjectSnapshot[];
   /** 本帧新被吞噬的物体 id（客户端移除对应实例）。 */
   consumedObjectIds: readonly string[];
+  powerUps: readonly MapPowerUp[];
+  footprints: readonly FootprintStrike[];
+  poopHazards: readonly PoopHazard[];
 }
 
 export interface PlayerAssignment {

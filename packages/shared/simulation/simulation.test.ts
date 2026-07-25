@@ -16,6 +16,8 @@ import {
   CITY_VEHICLE_COUNT,
   GAME_DURATION_SECONDS,
   INITIAL_HOLE_RADIUS,
+  FOOTPRINT_MARK_SECONDS,
+  MAGNET_DURATION_SECONDS,
   MAP_HALF_HEIGHT,
   MAP_HALF_WIDTH,
   MAP_HEIGHT,
@@ -41,6 +43,7 @@ import {
   PREFAB_DEFINITIONS,
 } from "./prefabs";
 import { getHoleProgress } from "./progression";
+import { isInsideNormalizedFootprint } from "./footprint";
 import type { SimulationState, WorldObjectState } from "./types";
 import { CITY_BLOCK_LAYOUTS, RUNTIME_BUILDING_PREFAB_IDS, createInitialSimulation } from "./world";
 
@@ -295,6 +298,11 @@ describe("abilities", () => {
     expect(RADIUS_BOOST_DURATION_SECONDS).toBe(10);
     expect(RADIUS_BOOST_COOLDOWN_SECONDS).toBe(25);
     expect(BOMB_COOLDOWN_SECONDS).toBe(45);
+
+    const afterOneSecond = advance(result.state, 60).holes[0];
+    expect(afterOneSecond?.speedBoostCooldown).toBeLessThan(SPEED_BOOST_COOLDOWN_SECONDS);
+    expect(afterOneSecond?.radiusBoostCooldown).toBeLessThan(RADIUS_BOOST_COOLDOWN_SECONDS);
+    expect(afterOneSecond?.bombCooldown).toBeLessThan(BOMB_COOLDOWN_SECONDS);
   });
 
   it("promotes the radius ability to the next permanent growth level", () => {
@@ -327,7 +335,7 @@ describe("abilities", () => {
     expect(afterActiveWindow.holes[0]?.radius).toBe(getHoleProgress(nextThreshold).radius);
   });
 
-  it("eliminates enemies when the bomb fuse crosses zero", () => {
+  it("knocks enemies out and awards ten percent of their score when the bomb fuse crosses zero", () => {
     const initial = createInitialSimulation();
     const player = initial.holes.find((hole) => hole.id === "player");
     const revivableBot = initial.holes.find((hole) => hole.id === "bot-1");
@@ -346,8 +354,8 @@ describe("abilities", () => {
             bombFuseRemaining: 0.05,
             bombCooldown: BOMB_COOLDOWN_SECONDS,
           },
-          { ...revivableBot, position: { x: 2, y: 0 } },
-          { ...finalLifeBot, position: { x: 3, y: 0 }, revivesRemaining: 0 },
+          { ...revivableBot, position: { x: 2, y: 0 }, score: 2_000 },
+          { ...finalLifeBot, position: { x: 3, y: 0 }, score: 20_000, revivesRemaining: 0 },
         ],
         objects: [],
       },
@@ -358,8 +366,9 @@ describe("abilities", () => {
     const defeatedBot = result.state.holes.find((hole) => hole.id === revivableBot.id);
     const eliminatedBot = result.state.holes.find((hole) => hole.id === finalLifeBot.id);
     expect(defeatedBot?.eliminationRemaining).toBeGreaterThan(0);
-    expect(defeatedBot?.revivesRemaining).toBe(0);
-    expect(eliminatedBot?.isOut).toBe(true);
+    expect(eliminatedBot?.eliminationRemaining).toBeGreaterThan(0);
+    expect(eliminatedBot?.isOut).toBe(false);
+    expect(result.state.holes.find((hole) => hole.id === player.id)?.score).toBe(1_200);
   });
 
   it("does not bomb invulnerable or out-of-range enemies", () => {
@@ -1108,12 +1117,12 @@ describe("world defaults", () => {
     );
     const winner = result.state.holes.find((hole) => hole.id === "player");
     const respawnedBot = result.state.holes.find((hole) => hole.id === "bot-1");
-    expect(winner?.score).toBeGreaterThan(40);
+    expect(winner?.score).toBe(340);
     expect(respawnedBot?.score).toBe(20);
     expect(respawnedBot?.radius).toBeCloseTo(getHoleProgress(20).radius);
     expect(respawnedBot?.eliminationRemaining).toBeGreaterThan(0);
     expect(respawnedBot?.eliminations).toBe(1);
-    expect(respawnedBot?.revivesRemaining).toBe(0);
+    expect(respawnedBot?.isOut).toBe(false);
   });
 
   it("requires the entire smaller hole to be covered before a capture", () => {
@@ -1140,7 +1149,7 @@ describe("world defaults", () => {
     expect(unresolvedBot?.eliminationRemaining).toBe(0);
   });
 
-  it("respawns once with five seconds of immunity and ends the match on a second human defeat", () => {
+  it("respawns indefinitely with five seconds of immunity until time expires", () => {
     const initial = createInitialSimulation();
     const player = initial.holes[0];
     const bot = initial.holes[1];
@@ -1191,7 +1200,7 @@ describe("world defaults", () => {
     ).state;
     expect(immuneResult.holes.find((hole) => hole.id === "player")?.isOut).toBe(false);
 
-    const finalResult = stepSimulation(
+    const secondDefeat = stepSimulation(
       {
         ...respawned,
         holes: [
@@ -1208,7 +1217,216 @@ describe("world defaults", () => {
       [],
       1 / 60,
     ).state;
-    expect(finalResult.status).toBe("finished");
-    expect(finalResult.holes.find((hole) => hole.id === "player")?.isOut).toBe(true);
+    expect(secondDefeat.status).toBe("playing");
+    expect(secondDefeat.holes.find((hole) => hole.id === "player")?.isOut).toBe(false);
+    expect(
+      secondDefeat.holes.find((hole) => hole.id === "player")?.eliminationRemaining,
+    ).toBeGreaterThan(0);
+  });
+
+  it("spawns one power-up per player every minute", () => {
+    const initial = createInitialSimulation();
+    expect(initial.powerUps).toHaveLength(initial.holes.length);
+    const result = stepSimulation(
+      { ...initial, elapsed: 59.95, remaining: 120.05, objects: [], powerUps: [] },
+      [],
+      0.1,
+    ).state;
+    expect(result.powerUps).toHaveLength(result.holes.length);
+    expect(result.nextPowerUpSpawnAt).toBe(120);
+  });
+
+  it("applies fixed-score, shrink, and ten-second magnet pickups authoritatively", () => {
+    const initial = createInitialSimulation();
+    const player = initial.holes[0];
+    const object = initial.objects.find((candidate) => candidate.status === "static");
+    if (!player || !object) throw new Error("Player and object are required");
+    const pickupPosition = { ...player.position };
+    const base = {
+      ...initial,
+      holes: [{ ...player, score: 50 }],
+      objects: [
+        { ...object, position: { x: player.position.x + player.radius * 5, y: player.position.y } },
+      ],
+    };
+    const burger = stepSimulation(
+      { ...base, powerUps: [{ id: "burger", type: "burger", position: pickupPosition }] },
+      [],
+      1 / 60,
+    ).state;
+    expect(burger.holes[0]?.score).toBe(450);
+
+    const shrink = stepSimulation(
+      { ...base, powerUps: [{ id: "shrink", type: "shrink", position: pickupPosition }] },
+      [],
+      1 / 60,
+    ).state;
+    expect(shrink.objects[0]?.sizeMultiplier).toBe(object.sizeMultiplier * 0.5);
+    expect(shrink.objects[0]?.fitDiameter).toBe(object.fitDiameter * 0.5);
+
+    const magnet = stepSimulation(
+      { ...base, powerUps: [{ id: "magnet", type: "magnet", position: pickupPosition }] },
+      [],
+      1 / 60,
+    ).state;
+    expect(
+      magnet.holes[0]?.activePowerUps.find((effect) => effect.type === "magnet")?.remaining,
+    ).toBe(MAGNET_DURATION_SECONDS);
+    expect(MAGNET_DURATION_SECONDS).toBe(10);
+  });
+
+  it("allows a player to trigger their own poop hazard", () => {
+    const initial = createInitialSimulation();
+    const player = initial.holes[0];
+    if (!player) throw new Error("Player is required");
+    const result = stepSimulation(
+      {
+        ...initial,
+        holes: [player],
+        objects: [],
+        poopHazards: [{ id: "self-poop", ownerId: player.id, position: { ...player.position } }],
+      },
+      [],
+      1 / 60,
+    );
+    expect(result.events).toContainEqual({ type: "poop-hit", holeId: player.id });
+    expect(result.state.poopHazards).toHaveLength(0);
+  });
+
+  it("delays a footprint for three seconds and fades its mark for four seconds", () => {
+    const initial = createInitialSimulation();
+    const player = initial.holes[0];
+    if (!player) throw new Error("Player is required");
+    let state = stepSimulation(
+      {
+        ...initial,
+        holes: [player],
+        objects: [],
+        powerUps: [{ id: "foot", type: "foot", position: { ...player.position } }],
+      },
+      [],
+      1 / 60,
+    ).state;
+    expect(state.footprints[0]?.impactRemaining).toBe(3);
+    state = advance(state, 180);
+    expect(state.footprints[0]?.impactRemaining).toBeCloseTo(0, 10);
+    expect(state.footprints[0]?.fadeRemaining).toBeCloseTo(FOOTPRINT_MARK_SECONDS, 1);
+    expect(FOOTPRINT_MARK_SECONDS).toBe(4);
+  });
+
+  it("keeps a delayed footprint on the owner's current hole position until impact", () => {
+    const initial = createInitialSimulation();
+    const player = initial.holes[0];
+    if (!player) throw new Error("Player is required");
+    let state = stepSimulation(
+      {
+        ...initial,
+        holes: [player],
+        objects: [],
+        powerUps: [{ id: "foot", type: "foot", position: { ...player.position } }],
+      },
+      [],
+      1 / 60,
+    ).state;
+    const movedPosition = { x: player.position.x + 8, y: player.position.y + 5 };
+    state = stepSimulation(
+      { ...state, holes: [{ ...state.holes[0]!, position: movedPosition }] },
+      [],
+      1 / 60,
+    ).state;
+    expect(state.footprints[0]?.position).toEqual(movedPosition);
+  });
+
+  it("uses a recognizable footprint silhouette with separated toes and a narrow arch", () => {
+    expect(isInsideNormalizedFootprint({ x: 0, y: 0.4 })).toBe(true);
+    expect(isInsideNormalizedFootprint({ x: 0, y: -0.44 })).toBe(true);
+    expect(isInsideNormalizedFootprint({ x: 0.22, y: 0.15 })).toBe(false);
+    expect(isInsideNormalizedFootprint({ x: 0.45, y: 0 })).toBe(false);
+  });
+
+  it("abandons a claimed active target that is stuck and resumes bot movement", () => {
+    const initial = createInitialSimulation();
+    const bot = initial.holes.find((hole) => hole.id === "bot-1");
+    if (!bot?.bot) throw new Error("Bot is required");
+    const stuckObject = {
+      ...boxObject(0),
+      status: "active" as const,
+      position: { ...bot.position },
+      activeTime: 4.1,
+      claimedBy: bot.id,
+    };
+    const state = stepSimulation(
+      {
+        ...initial,
+        holes: [
+          {
+            ...bot,
+            bot: { ...bot.bot, mode: "chase", targetObjectId: stuckObject.id },
+          },
+        ],
+        objects: [stuckObject],
+      },
+      [],
+      1 / 60,
+    ).state;
+    expect(state.holes[0]?.bot?.targetObjectId).toBeNull();
+    expect(state.holes[0]?.position).not.toEqual(bot.position);
+  });
+
+  it("immediately consumes and scores static and active objects inside a footprint", () => {
+    const initial = createInitialSimulation();
+    const player = initial.holes[0];
+    if (!player) throw new Error("Player is required");
+    const staticPerson = {
+      ...boxObject(0, 0.5, 1.7),
+      id: "static-person",
+      prefabId: "character-a",
+      position: { ...player.position },
+      value: 4,
+    };
+    const activePerson = {
+      ...staticPerson,
+      id: "active-person",
+      status: "active" as const,
+      claimedBy: player.id,
+      activeTime: 0.4,
+    };
+    const outside = {
+      ...staticPerson,
+      id: "outside",
+      position: { x: player.position.x + player.radius * 2, y: player.position.y },
+    };
+    const result = stepSimulation(
+      {
+        ...initial,
+        holes: [player],
+        objects: [staticPerson, activePerson, outside],
+        footprints: [
+          {
+            id: "impact",
+            ownerId: player.id,
+            position: { ...player.position },
+            width: player.radius * 3,
+            length: player.radius * 6,
+            rotation: 0,
+            impactRemaining: 0.01,
+            fadeRemaining: 0,
+          },
+        ],
+      },
+      [],
+      0.02,
+    );
+    expect(result.state.objects.find((object) => object.id === staticPerson.id)?.status).toBe(
+      "consumed",
+    );
+    expect(result.state.objects.find((object) => object.id === activePerson.id)?.status).toBe(
+      "consumed",
+    );
+    expect(result.state.objects.find((object) => object.id === outside.id)?.status).not.toBe(
+      "consumed",
+    );
+    expect(result.state.holes[0]?.score).toBe(8);
+    expect(result.events.filter((event) => event.type === "consumed")).toHaveLength(2);
   });
 });

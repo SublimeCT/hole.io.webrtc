@@ -1,4 +1,5 @@
 import {
+  FOOTPRINT_MARK_SECONDS,
   PREFAB_DEFINITIONS,
   type HoleState,
   type PrefabDefinition,
@@ -60,6 +61,7 @@ export class CityObjectRenderer {
   readonly #hiddenSmallObjectIds = new Set<string>();
   readonly #animatedModels = new Map<string, AnimatedModel>();
   readonly #lastStatus = new Map<string, WorldObjectState["status"]>();
+  readonly #lastSizeMultiplier = new Map<string, number>();
   readonly #position = new THREE.Vector3();
   readonly #quaternion = new THREE.Quaternion();
   readonly #scale = new THREE.Vector3(1, 1, 1);
@@ -154,6 +156,7 @@ export class CityObjectRenderer {
           this.#setInstanceTransforms(batch, indices, object);
         }
         this.#lastStatus.set(object.id, object.status);
+        this.#lastSizeMultiplier.set(object.id, object.sizeMultiplier);
       });
       meshes.forEach((mesh) => {
         mesh.instanceMatrix.needsUpdate = true;
@@ -180,17 +183,25 @@ export class CityObjectRenderer {
         continue;
       }
       const previousStatus = this.#lastStatus.get(object.id);
+      const sizeChanged = this.#lastSizeMultiplier.get(object.id) !== object.sizeMultiplier;
       const animated = this.#animatedModels.get(object.id);
       if (animated) {
-        animated.group.visible = object.status !== "consumed";
+        const footprintFade = object.footprintFadeRemaining ?? 0;
+        animated.group.visible = object.status !== "consumed" || footprintFade > 0;
         if (animated.group.visible) {
           this.#setGroupTransform(animated.group, object);
+          if (object.status === "consumed") {
+            this.#applyFootprintFade(animated.group, object, footprintFade);
+          } else {
+            this.#restoreModelMaterials(animated.group);
+          }
           animated.action.paused = object.status !== "static" || !object.motion;
           if (!animated.action.paused) {
             animated.mixer.update(deltaSeconds);
           }
         }
         this.#lastStatus.set(object.id, object.status);
+        this.#lastSizeMultiplier.set(object.id, object.sizeMultiplier);
         continue;
       }
       const wasHiddenSmallObject = this.#hiddenSmallObjectIds.has(object.id);
@@ -219,6 +230,7 @@ export class CityObjectRenderer {
         const activeModel = this.#activeModels.get(object.id);
         if (activeModel) activeModel.visible = false;
         this.#lastStatus.set(object.id, object.status);
+        this.#lastSizeMultiplier.set(object.id, object.sizeMultiplier);
         continue;
       }
       if (wasHiddenSmallObject) {
@@ -243,7 +255,7 @@ export class CityObjectRenderer {
           object,
         );
         transparentModel.visible = true;
-        if (!wasTransparent || previousStatus !== "static") {
+        if (!wasTransparent || previousStatus !== "static" || sizeChanged) {
           this.#setGroupTransform(transparentModel, object);
         }
         const activeModel = this.#activeModels.get(object.id);
@@ -251,6 +263,7 @@ export class CityObjectRenderer {
           activeModel.visible = false;
         }
         this.#lastStatus.set(object.id, object.status);
+        this.#lastSizeMultiplier.set(object.id, object.sizeMultiplier);
         continue;
       }
       if (wasTransparent) {
@@ -263,6 +276,7 @@ export class CityObjectRenderer {
       if (object.status === "static") {
         if (
           previousStatus !== "static" ||
+          sizeChanged ||
           object.motion ||
           wasTransparent ||
           wasHiddenSmallObject
@@ -282,9 +296,31 @@ export class CityObjectRenderer {
           });
         }
         const activeModel = this.#getActiveModel(object.id, instance.batch.prefab, object);
-        activeModel.visible = object.status !== "consumed";
+        activeModel.visible =
+          object.status !== "consumed" || (object.footprintFadeRemaining ?? 0) > 0;
         if (activeModel.visible) {
-          activeModel.position.set(object.position.x, object.centerY, object.position.y);
+          const fade = object.footprintFadeRemaining ?? 0;
+          activeModel.position.set(
+            object.position.x,
+            object.status === "consumed"
+              ? object.centerY - (1 - fade / FOOTPRINT_MARK_SECONDS) * object.height * 1.4
+              : object.centerY,
+            object.position.y,
+          );
+          activeModel.scale.setScalar(
+            object.sizeMultiplier *
+              (object.status === "consumed" ? Math.max(0.05, fade / FOOTPRINT_MARK_SECONDS) : 1),
+          );
+          activeModel.traverse((child) => {
+            if (!(child instanceof THREE.Mesh)) return;
+            const materials = Array.isArray(child.material) ? child.material : [child.material];
+            materials.forEach((material) => {
+              material.transparent = object.status === "consumed";
+              material.opacity =
+                object.status === "consumed" ? Math.max(0, fade / FOOTPRINT_MARK_SECONDS) : 1;
+              material.depthWrite = object.status !== "consumed";
+            });
+          });
           activeModel.quaternion.set(
             object.rotation.x,
             object.rotation.y,
@@ -294,6 +330,7 @@ export class CityObjectRenderer {
         }
       }
       this.#lastStatus.set(object.id, object.status);
+      this.#lastSizeMultiplier.set(object.id, object.sizeMultiplier);
     }
     touchedMeshes.forEach((mesh) => {
       mesh.instanceMatrix.needsUpdate = true;
@@ -317,6 +354,11 @@ export class CityObjectRenderer {
     materials.forEach((material) => material.dispose());
     this.#animatedModels.forEach(({ mixer, group }) => {
       mixer.stopAllAction();
+      group.traverse((child) => {
+        if (!(child instanceof THREE.Mesh)) return;
+        const animatedMaterials = Array.isArray(child.material) ? child.material : [child.material];
+        animatedMaterials.forEach((material) => material.dispose());
+      });
       this.#scene.remove(group);
     });
     this.#transparentModels.forEach((group) => {
@@ -325,6 +367,14 @@ export class CityObjectRenderer {
           const materials = Array.isArray(child.material) ? child.material : [child.material];
           materials.forEach((material) => material.dispose());
         }
+      });
+      this.#scene.remove(group);
+    });
+    this.#activeModels.forEach((group) => {
+      group.traverse((child) => {
+        if (!(child instanceof THREE.Mesh)) return;
+        const materials = Array.isArray(child.material) ? child.material : [child.material];
+        materials.forEach((material) => material.dispose());
       });
       this.#scene.remove(group);
     });
@@ -422,7 +472,8 @@ export class CityObjectRenderer {
     object: WorldObjectState,
     layer: number,
   ): void {
-    const baseHeight = object.height / object.stackLayers;
+    const baseHeight =
+      object.height / object.stackLayers / Math.max(object.sizeMultiplier, Number.EPSILON);
     this.#position.set(
       object.position.x,
       object.stackLayers === 1 ? object.centerY : baseHeight * (layer + 0.5),
@@ -451,6 +502,12 @@ export class CityObjectRenderer {
       return existing;
     }
     const model = this.#createStackedModel(prefab, object);
+    model.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      const materials = Array.isArray(child.material) ? child.material : [child.material];
+      const clones = materials.map((material) => material.clone());
+      child.material = clones.length === 1 ? (clones[0] ?? child.material) : clones;
+    });
     this.#activeModels.set(id, model);
     this.#scene.add(model);
     return model;
@@ -496,9 +553,9 @@ export class CityObjectRenderer {
     for (let layer = 0; layer < object.stackLayers; layer += 1) {
       const floor = prefab.template.clone(true);
       floor.position.y = baseHeight * (layer - (object.stackLayers - 1) / 2);
-      floor.scale.setScalar(object.sizeMultiplier);
       model.add(floor);
     }
+    model.scale.setScalar(object.sizeMultiplier);
     return model;
   }
 
@@ -508,6 +565,12 @@ export class CityObjectRenderer {
       return existing;
     }
     const group = prefab.template.clone(true);
+    group.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      const materials = Array.isArray(child.material) ? child.material : [child.material];
+      const clones = materials.map((material) => material.clone());
+      child.material = clones.length === 1 ? (clones[0] ?? child.material) : clones;
+    });
     const mixer = new THREE.AnimationMixer(group);
     const walk = THREE.AnimationClip.findByName(prefab.animations, "walk");
     if (!walk) {
@@ -529,6 +592,33 @@ export class CityObjectRenderer {
       object.rotation.z,
       object.rotation.w,
     );
+    group.scale.setScalar(object.sizeMultiplier);
+  }
+
+  #applyFootprintFade(group: THREE.Group, object: WorldObjectState, remaining: number): void {
+    const ratio = Math.max(0, Math.min(1, remaining / FOOTPRINT_MARK_SECONDS));
+    group.position.y = object.centerY - (1 - ratio) * object.height * 1.4;
+    group.scale.setScalar(object.sizeMultiplier * Math.max(0.05, ratio));
+    group.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      const materials = Array.isArray(child.material) ? child.material : [child.material];
+      materials.forEach((material) => {
+        material.transparent = true;
+        material.opacity = ratio;
+        material.depthWrite = false;
+      });
+    });
+  }
+
+  #restoreModelMaterials(group: THREE.Group): void {
+    group.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      const materials = Array.isArray(child.material) ? child.material : [child.material];
+      materials.forEach((material) => {
+        material.opacity = 1;
+        material.depthWrite = true;
+      });
+    });
   }
 
   #shouldFadeBuilding(object: WorldObjectState, context: CityVisibilityContext): boolean {

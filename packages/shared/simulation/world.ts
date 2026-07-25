@@ -22,12 +22,24 @@ import {
 import { getPrefabDefinition, HIGHEST_BUILDING_PREFAB_ID } from "./prefabs";
 import type {
   HoleState,
+  MapPowerUp,
+  PowerUpType,
   Quaternion,
   RouteMotion,
   SimulationState,
   Vector2,
   WorldObjectState,
 } from "./types";
+
+const POWER_UP_TYPES: readonly PowerUpType[] = [
+  "magnet",
+  "shrink",
+  "foot",
+  "burger",
+  "poop",
+  "doubleFoot",
+  "beer",
+];
 
 const VEHICLE_PREFABS = [
   "sedan",
@@ -1030,6 +1042,8 @@ function createHoles(
       radiusBoostCooldown: 0,
       bombFuseRemaining: 0,
       bombCooldown: 0,
+      activePowerUps: [],
+      nextPoopDropIn: 0,
       isOut: false,
       bot:
         index === 0
@@ -1050,13 +1064,38 @@ function createHoles(
 
 export function createInitialSimulation(seed = 0x5eed1234, spawnSeed = seed): SimulationState {
   const objects = buildCityObjects();
-  const [holes, rngState] = createHoles(spawnSeed, objects);
+  const [holes, holeRngState] = createHoles(spawnSeed, objects);
+  let rngState = holeRngState;
+  const powerUps: MapPowerUp[] = [];
+  for (let index = 0; index < holes.length; index += 1) {
+    const [randomX, afterX] = nextRandom(rngState);
+    const [randomY, afterY] = nextRandom(afterX);
+    const [randomType, afterType] = nextRandom(afterY);
+    rngState = afterType;
+    powerUps.push({
+      id: `power-up-0-${index}`,
+      type: POWER_UP_TYPES[Math.floor(randomType * POWER_UP_TYPES.length)] ?? "magnet",
+      position: {
+        x: (randomX * 2 - 1) * (MAP_HALF_WIDTH - 4),
+        y: (randomY * 2 - 1) * (MAP_HALF_HEIGHT - 4),
+      },
+    });
+  }
   return {
     elapsed: 0,
     remaining: GAME_DURATION_SECONDS,
     status: "playing",
     holes,
     objects,
+    powerUps,
+    footprints: [],
+    poopHazards: [],
+    positionHistory: holes.map((hole) => ({
+      holeId: hole.id,
+      elapsed: 0,
+      position: { ...hole.position },
+    })),
+    nextPowerUpSpawnAt: 60,
     rngState,
   };
 }

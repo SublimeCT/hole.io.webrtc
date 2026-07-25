@@ -3,6 +3,9 @@ import { HashRouter, Navigate, Route, Routes } from "react-router-dom";
 
 import { HomePage } from "../pages/HomePage";
 import { ResultsPage } from "../pages/ResultsPage";
+import { VoidWordmark } from "../ui/VoidWordmark";
+import { translate } from "./i18n";
+import { loadPreferences } from "./preferences";
 
 const GamePage = lazy(() => import("../pages/GamePage"));
 
@@ -27,17 +30,18 @@ export function App() {
 }
 
 function RouteLoading() {
+  const language = loadPreferences().language;
   return (
     <main className="app-shell">
       <div className="screen-texture" aria-hidden="true" />
       <div className="loading" role="status" aria-live="polite">
         <div className="loading-content">
-          <span className="kicker">ENTERING DISTRICT</span>
-          <strong>HOLE CITY</strong>
+          <span className="kicker">{translate(language, "entering")}</span>
+          <VoidWordmark />
           <div className="loading-track">
             <i />
           </div>
-          <span className="loading-status">LOADING GAME</span>
+          <span className="loading-status">{translate(language, "loadingGame")}</span>
         </div>
       </div>
     </main>

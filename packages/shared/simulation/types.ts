@@ -19,6 +19,12 @@ export interface Quaternion {
 export type HoleKind = "human" | "bot";
 export type BotMode = "wander" | "chase";
 export type AbilityId = "speed" | "radius" | "bomb";
+export type PowerUpType = "magnet" | "shrink" | "foot" | "burger" | "poop" | "doubleFoot" | "beer";
+
+export interface ActivePowerUp {
+  type: PowerUpType;
+  remaining: number;
+}
 
 export interface BotState {
   mode: BotMode;
@@ -46,6 +52,8 @@ export interface HoleState {
   radiusBoostCooldown: number;
   bombFuseRemaining: number;
   bombCooldown: number;
+  activePowerUps: readonly ActivePowerUp[];
+  nextPoopDropIn: number;
   isOut: boolean;
   bot: BotState | null;
 }
@@ -88,6 +96,8 @@ export interface WorldObjectState {
   claimedBy: string | null;
   motion: RouteMotion | null;
   routeMotion: RouteMotion | null;
+  /** >0 while a footprint-swallowed object remains visible as it fades below ground. */
+  footprintFadeRemaining?: number;
 }
 
 export type SimulationStatus = "playing" | "finished";
@@ -98,7 +108,41 @@ export interface SimulationState {
   status: SimulationStatus;
   holes: readonly HoleState[];
   objects: readonly WorldObjectState[];
+  powerUps: readonly MapPowerUp[];
+  footprints: readonly FootprintStrike[];
+  poopHazards: readonly PoopHazard[];
+  positionHistory: readonly PositionHistorySample[];
+  nextPowerUpSpawnAt: number;
   rngState: number;
+}
+
+export interface MapPowerUp {
+  id: string;
+  type: PowerUpType;
+  position: Vector2;
+}
+
+export interface FootprintStrike {
+  id: string;
+  ownerId: string;
+  position: Vector2;
+  width: number;
+  length: number;
+  rotation: number;
+  impactRemaining: number;
+  fadeRemaining: number;
+}
+
+export interface PoopHazard {
+  id: string;
+  ownerId: string;
+  position: Vector2;
+}
+
+export interface PositionHistorySample {
+  holeId: string;
+  elapsed: number;
+  position: Vector2;
 }
 
 export interface PlayerInput {
@@ -107,13 +151,16 @@ export interface PlayerInput {
   abilities?: readonly AbilityId[];
 }
 
-export type SimulationEvent = {
-  type: "consumed";
-  objectId: string;
-  holeId: string;
-  value: number;
-  position: Vector2;
-};
+export type SimulationEvent =
+  | {
+      type: "consumed" | "player-defeated";
+      objectId: string;
+      holeId: string;
+      value: number;
+      position: Vector2;
+    }
+  | { type: "power-up-collected"; holeId: string; powerUpType: PowerUpType }
+  | { type: "poop-hit"; holeId: string };
 
 export interface SimulationStepResult {
   state: SimulationState;

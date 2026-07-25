@@ -243,7 +243,13 @@ export function stepActivePhysics(
   for (const group of groups) {
     const world = new World();
     world.broadphase = new SAPBroadphase(world);
-    world.gravity.set(0, -GRAVITY_METERS_PER_SECOND_SQUARED, 0);
+    const fallMultiplier =
+      group.hole?.activePowerUps.reduce((multiplier, effect) => {
+        if (effect.type === "magnet") return Math.max(multiplier, 3);
+        if (effect.type === "beer") return Math.max(multiplier, 2);
+        return multiplier;
+      }, 1) ?? 1;
+    world.gravity.set(0, -GRAVITY_METERS_PER_SECOND_SQUARED * fallMultiplier, 0);
     world.defaultContactMaterial.friction = 0.78;
     world.defaultContactMaterial.restitution = 0;
     world.addBody(createGroundBody(group.hole));

@@ -1,6 +1,9 @@
+import { isLanguage, type Language } from "./i18n";
+
 export interface GamePreferences {
   playerName: string;
   playerRingColor: string;
+  language: Language;
 }
 
 const PREFERENCES_KEY = "hole-city-player-preferences";
@@ -8,6 +11,7 @@ const PREFERENCES_KEY = "hole-city-player-preferences";
 export const DEFAULT_PREFERENCES: GamePreferences = {
   playerName: "玩家",
   playerRingColor: "#2bf0ff",
+  language: "zh-CN",
 };
 
 export function loadPreferences(): GamePreferences {
@@ -26,6 +30,7 @@ export function loadPreferences(): GamePreferences {
       return {
         playerName: parsed.playerName.slice(0, 9).trim() || DEFAULT_PREFERENCES.playerName,
         playerRingColor: parsed.playerRingColor,
+        language: "language" in parsed && isLanguage(parsed.language) ? parsed.language : "zh-CN",
       };
     }
   } catch {

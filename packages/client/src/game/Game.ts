@@ -18,18 +18,20 @@ import {
   type AbilityId,
   type SimulationEvent,
   type SimulationState,
+  type PowerUpType,
 } from "@hole-io/shared/simulation";
 import * as THREE from "three";
 
 import type { MatchResult } from "../app/matchResult";
+import { translate } from "../app/i18n";
 import type { GamePreferences } from "../app/preferences";
 import { CityObjectRenderer } from "./CityObjectRenderer";
 import { Feedback } from "./Feedback";
 import { HoleRenderer } from "./HoleRenderer";
 import { InputController } from "./InputController";
+import { PowerUpRenderer } from "./PowerUpRenderer";
 
 const FIXED_STEP_SECONDS = 1 / 60;
-const MAX_FRAME_SECONDS = 0.1;
 
 export interface GameUi {
   score: HTMLElement;
@@ -49,6 +51,7 @@ export interface GameUi {
   opponentIndicators: readonly [OpponentIndicatorUi, OpponentIndicatorUi];
   abilityButtons: readonly [AbilityButtonUi, AbilityButtonUi, AbilityButtonUi];
   abilityFeedback: HTMLElement;
+  powerUpLayer: HTMLElement;
 }
 
 export interface AbilityButtonUi {
@@ -82,6 +85,7 @@ export class Game {
   readonly #feedback = new Feedback();
   readonly #cityObjects: CityObjectRenderer;
   readonly #holeRenderer: HoleRenderer;
+  readonly #powerUpRenderer: PowerUpRenderer;
   readonly #geometries = new Set<THREE.BufferGeometry>();
   readonly #materials = new Set<THREE.Material>();
   readonly #textures = new Set<THREE.Texture>();
@@ -103,6 +107,7 @@ export class Game {
   readonly #mobileGraphics: boolean;
   readonly #preferences: GamePreferences;
   readonly #onMatchEnd: (result: MatchResult) => void;
+  readonly #onPoopHit: (playerCount: number) => void;
   readonly #pendingAbilities = new Set<AbilityId>();
   #abilityFeedbackTimer: number | null = null;
   #lastBombFuseRemaining = 0;
@@ -114,11 +119,13 @@ export class Game {
     preferences: GamePreferences,
     initialState: SimulationState,
     onMatchEnd: (result: MatchResult) => void,
+    onPoopHit: (playerCount: number) => void,
   ) {
     this.#canvas = canvas;
     this.#ui = ui;
     this.#preferences = preferences;
     this.#onMatchEnd = onMatchEnd;
+    this.#onPoopHit = onPoopHit;
     this.#state = initialState;
     this.#mobileGraphics = window.matchMedia("(pointer: coarse)").matches;
     this.#renderer = new THREE.WebGLRenderer({
@@ -135,6 +142,7 @@ export class Game {
     this.#input = new InputController(canvas, ui.dragPad, ui.dragKnob);
     this.#cityObjects = new CityObjectRenderer(this.#scene);
     this.#holeRenderer = new HoleRenderer(this.#scene, preferences);
+    this.#powerUpRenderer = new PowerUpRenderer(this.#scene, ui.powerUpLayer);
     this.#buildScene();
     this.#holeRenderer.build(initialState.holes);
     this.#resize();
@@ -153,6 +161,7 @@ export class Game {
     ui: GameUi,
     preferences: GamePreferences,
     onMatchEnd: (result: MatchResult) => void,
+    onPoopHit: (playerCount: number) => void,
   ): Promise<Game> {
     const mapSeed = 0x5eed1234;
     const spawnSeed = (crypto.getRandomValues(new Uint32Array(1))[0] ?? Date.now()) >>> 0;
@@ -162,6 +171,7 @@ export class Game {
       preferences,
       createInitialSimulation(mapSeed, spawnSeed),
       onMatchEnd,
+      onPoopHit,
     );
     try {
       await game.#cityObjects.initialize(game.#state.objects, (loaded, total) => {
@@ -202,6 +212,7 @@ export class Game {
     this.#feedback.dispose();
     this.#cityObjects.dispose();
     this.#holeRenderer.dispose();
+    this.#powerUpRenderer.dispose();
     this.#geometries.forEach((geometry) => geometry.dispose());
     this.#materials.forEach((material) => material.dispose());
     this.#textures.forEach((texture) => texture.dispose());
@@ -212,7 +223,7 @@ export class Game {
     if (!this.#pageVisible) {
       return;
     }
-    const frameSeconds = Math.min((time - this.#lastTime) / 1000, MAX_FRAME_SECONDS);
+    const frameSeconds = Math.min((time - this.#lastTime) / 1000, this.#state.remaining);
     this.#lastTime = time;
     this.#accumulator += frameSeconds;
     this.#hudAccumulator += frameSeconds;
@@ -411,16 +422,36 @@ export class Game {
     this.#cameraTarget.set(player.position.x, 0, player.position.y);
     const radiusRatio = player.radius / INITIAL_HOLE_RADIUS;
     const zoomScale = 1 + Math.max(0, radiusRatio - 1) * 0.5;
-    this.#cameraOffset.set(0, 20.5 * zoomScale, 15 * zoomScale);
+    const doubleFoot = player.activePowerUps.some((effect) => effect.type === "doubleFoot");
+    const beer = player.activePowerUps.some((effect) => effect.type === "beer");
+    this.#cameraOffset.set(
+      0,
+      doubleFoot ? 32 * zoomScale : 20.5 * zoomScale,
+      doubleFoot ? 0.01 : 15 * zoomScale,
+    );
     this.#cameraDesired.copy(this.#cameraTarget).add(this.#cameraOffset);
+    if (beer) {
+      this.#cameraDesired.x += Math.sin(this.#state.elapsed * 3.2) * 0.45;
+      this.#cameraDesired.z += Math.cos(this.#state.elapsed * 2.7) * 0.4;
+    }
     const followAlpha = 1 - Math.exp(-5.5 * deltaSeconds);
     this.#camera.position.lerp(this.#cameraDesired, followAlpha);
+    this.#camera.up.set(0, doubleFoot ? 0 : 1, doubleFoot ? -1 : 0);
     this.#camera.lookAt(this.#cameraTarget);
     this.#camera.updateMatrixWorld();
     this.#cityObjects.sync(this.#state.objects, deltaSeconds, {
       player,
       cameraPosition: this.#camera.position,
     });
+    this.#powerUpRenderer.sync(
+      this.#state.powerUps,
+      this.#state.footprints,
+      this.#state.poopHazards,
+      this.#state.holes,
+      this.#camera,
+      this.#canvas.clientWidth,
+      this.#canvas.clientHeight,
+    );
     this.#updateOpponentIndicators(player);
   }
 
@@ -486,8 +517,10 @@ export class Game {
     this.#ui.sizeLevel.textContent = (progress.level + 1).toString().padStart(2, "0");
     this.#ui.growthFill.style.transform = `scaleX(${progress.progress})`;
     this.#ui.growthCopy.textContent = progress.nextScore
-      ? `${progress.nextScore - player.score} TO NEXT SIZE`
-      : "MAX SIZE";
+      ? translate(this.#preferences.language, "toNext", {
+          count: progress.nextScore - player.score,
+        })
+      : translate(this.#preferences.language, "maxSize");
     this.#updateAbilityHud(player);
     const totalSeconds = Math.ceil(this.#state.remaining);
     const minutes = Math.floor(totalSeconds / 60);
@@ -512,7 +545,7 @@ export class Game {
       player.bombFuseRemaining === 0 &&
       player.bombCooldown > 0
     ) {
-      this.#showAbilityFeedback("IMPACT DETONATED", "bomb", 1_600);
+      this.#showAbilityFeedback(translate(this.#preferences.language, "impact"), "bomb", 1_600);
     }
     this.#lastBombFuseRemaining = player.bombFuseRemaining;
     const abilities: readonly [AbilityId, number, number, number, string][] = [
@@ -521,16 +554,22 @@ export class Game {
         player.speedBoostRemaining,
         player.speedBoostCooldown,
         SPEED_BOOST_COOLDOWN_SECONDS,
-        "READY",
+        translate(this.#preferences.language, "ready"),
       ],
       [
         "radius",
         player.radiusBoostRemaining,
         player.radiusBoostCooldown,
         RADIUS_BOOST_COOLDOWN_SECONDS,
-        "READY",
+        translate(this.#preferences.language, "ready"),
       ],
-      ["bomb", player.bombFuseRemaining, player.bombCooldown, BOMB_COOLDOWN_SECONDS, "READY"],
+      [
+        "bomb",
+        player.bombFuseRemaining,
+        player.bombCooldown,
+        BOMB_COOLDOWN_SECONDS,
+        translate(this.#preferences.language, "ready"),
+      ],
     ];
     this.#ui.abilityButtons.forEach((button, index) => {
       const entry = abilities[index];
@@ -542,15 +581,14 @@ export class Game {
       button.root.classList.toggle("is-cooldown", locked && active <= 0);
       const progress = cooldown / maxCooldown;
       button.root.style.setProperty("--ability-progress", `${Math.max(0, Math.min(1, progress))}`);
-      button.cooldown.textContent =
-        active > 0 ? `${active.toFixed(1)}s` : cooldown > 0 ? `${Math.ceil(cooldown)}s` : "";
+      button.cooldown.textContent = cooldown > 0 ? `${Math.ceil(cooldown)}s` : "";
       button.status.textContent =
         active > 0
           ? entry[0] === "bomb"
-            ? "FUSE"
-            : "ACTIVE"
+            ? translate(this.#preferences.language, "fuse")
+            : translate(this.#preferences.language, "active")
           : cooldown > 0
-            ? "RECHARGE"
+            ? translate(this.#preferences.language, "recharge")
             : readyCopy;
     });
   }
@@ -573,7 +611,7 @@ export class Game {
       row.avatar.textContent = displayName.charAt(0).toUpperCase() || "·";
       row.name.textContent = displayName.toUpperCase();
       row.meta.textContent = hole.isOut
-        ? `Lv.${holeProgress.level + 1} · 出局`
+        ? `Lv.${holeProgress.level + 1} · ${translate(this.#preferences.language, "out")}`
         : `Lv.${holeProgress.level + 1} · R${hole.radius.toFixed(1)}`;
       row.score.textContent = hole.score.toString();
       row.root.classList.toggle("is-player", hole.kind === "human");
@@ -587,6 +625,31 @@ export class Game {
   }
 
   #handleEvent(event: SimulationEvent): void {
+    if (event.type === "poop-hit") {
+      if (event.holeId === "player") this.#onPoopHit(this.#state.holes.length);
+      return;
+    }
+    if (event.type === "power-up-collected") {
+      if (event.holeId === "player") {
+        const emoji: Record<PowerUpType, string> = {
+          magnet: "🧲",
+          shrink: "🔍",
+          foot: "🦶",
+          burger: "🍔",
+          poop: "💩",
+          doubleFoot: "👣",
+          beer: "🍺",
+        };
+        this.#showAbilityFeedback(
+          translate(this.#preferences.language, "itemActivated", {
+            emoji: emoji[event.powerUpType],
+          }),
+          "radius",
+          1_400,
+        );
+      }
+      return;
+    }
     if (event.holeId !== "player") {
       return;
     }
@@ -595,8 +658,7 @@ export class Game {
     this.#scoreWorldPosition.set(event.position.x, 0.5, event.position.y).project(this.#camera);
     const rect = this.#canvas.getBoundingClientRect();
     const popup = document.createElement("span");
-    // 大分值（吞噬玩家所得 max(12, loser×0.6)）按击杀样式高亮，纯前端启发式。
-    popup.className = `score-pop${event.value > 50 ? " is-kill" : ""}`;
+    popup.className = `score-pop${event.type === "player-defeated" ? " is-kill" : ""}`;
     popup.textContent = `+${event.value}`;
     popup.style.left = `${((this.#scoreWorldPosition.x + 1) / 2) * rect.width}px`;
     popup.style.top = `${((-this.#scoreWorldPosition.y + 1) / 2) * rect.height}px`;
@@ -630,7 +692,7 @@ export class Game {
       swallowCount: this.#playerSwallowCount,
       eliminations: playerHole?.eliminations ?? 0,
       elapsedSeconds: this.#state.elapsed,
-      maxRevives: 1,
+      maxRevives: playerHole?.eliminations ?? 0,
     };
   }
 
@@ -674,10 +736,10 @@ export class Game {
     this.#pendingAbilities.add(ability);
     const label =
       ability === "speed"
-        ? "BOOST ONLINE"
+        ? translate(this.#preferences.language, "boostOnline")
         : ability === "radius"
-          ? "VORTEX EXPANDED"
-          : "BOMB ARMED · 3 SEC";
+          ? translate(this.#preferences.language, "vortexExpanded")
+          : translate(this.#preferences.language, "bombArmed");
     this.#showAbilityFeedback(label, ability, ability === "bomb" ? 3_000 : 1_400);
   }
 
@@ -698,7 +760,6 @@ export class Game {
   readonly #onVisibilityChange = (): void => {
     this.#pageVisible = document.visibilityState !== "hidden";
     if (this.#pageVisible) {
-      this.#lastTime = performance.now();
       this.#sceneDirty = true;
       if (this.#matchStarted) {
         this.#renderer.setAnimationLoop(this.#frame);
