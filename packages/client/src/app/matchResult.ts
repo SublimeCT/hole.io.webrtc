@@ -10,6 +10,14 @@ export interface MatchResult {
   playerRank: number;
   playerScore: number;
   ranking: readonly MatchResultEntry[];
+  /** 本局玩家累计吞噬的目标数（结算数据卡用，可选以兼容旧存档）。 */
+  swallowCount?: number | undefined;
+  /** 本局玩家累计阵亡次数（结算数据卡用，可选以兼容旧存档）。 */
+  eliminations?: number | undefined;
+  /** 本局已经过的秒数（结算副标题用，可选以兼容旧存档）。 */
+  elapsedSeconds?: number | undefined;
+  /** 单局最大允许复活次数，用于「阵亡 / N」显示。 */
+  maxRevives?: number | undefined;
 }
 
 const MATCH_RESULT_KEY = "hole-city-last-match";
@@ -56,7 +64,18 @@ export function loadMatchResult(): MatchResult | null {
       );
     });
     if (ranking.length === 0) return null;
-    return { playerRank: parsed.playerRank, playerScore: parsed.playerScore, ranking };
+    const source = parsed as Record<string, unknown>;
+    const optionalNumeric = (value: unknown): number | undefined =>
+      typeof value === "number" && Number.isFinite(value) ? value : undefined;
+    return {
+      playerRank: parsed.playerRank,
+      playerScore: parsed.playerScore,
+      ranking,
+      swallowCount: optionalNumeric(source.swallowCount),
+      eliminations: optionalNumeric(source.eliminations),
+      elapsedSeconds: optionalNumeric(source.elapsedSeconds),
+      maxRevives: optionalNumeric(source.maxRevives),
+    };
   } catch {
     return null;
   }

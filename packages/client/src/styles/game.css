@@ -1,0 +1,790 @@
+/* ===== 游戏 HUD · 深渊 VOID (参考 game-hud.html 的 6 个区域) ===== */
+.app-shell {
+  position: fixed;
+  inset: 0;
+  isolation: isolate;
+  overflow: hidden;
+  background: var(--bg-deep);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* 仅 Game.ts 仍会写入、但原型不再单独展示的元素（分数/尺寸/成长条）。
+   数据照常更新，只是视觉上由排名行与黑洞成长环承担。 */
+.hud-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.hud-hidden .growth-track,
+.hud-hidden .growth-track i {
+  display: block;
+}
+
+/* ===== 顶部 HUD ===== */
+.hud-top {
+  position: absolute;
+  inset: 0 0 auto 0;
+  z-index: 20;
+  pointer-events: none;
+}
+
+.hud-top > * {
+  pointer-events: auto;
+}
+
+/* 左上 home 键 */
+.hud-home {
+  position: absolute;
+  left: max(14px, env(safe-area-inset-left));
+  top: max(14px, env(safe-area-inset-top));
+  width: 46px;
+  height: 46px;
+  border-radius: 13px;
+  background: var(--glass);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--border);
+  display: grid;
+  place-items: center;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  transition:
+    transform 0.14s,
+    border-color 0.14s;
+  color: var(--fg);
+}
+
+.hud-home:hover {
+  transform: translateY(-1px);
+  border-color: var(--border-strong);
+}
+
+.hud-home svg {
+  width: 22px;
+  height: 22px;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* 顶部倒计时 */
+.hud-timer {
+  position: absolute;
+  left: 50%;
+  top: max(14px, env(safe-area-inset-top));
+  transform: translateX(-50%);
+  font-family: var(--font-display);
+  font-weight: 900;
+  font-size: clamp(28px, 5vw, 42px);
+  line-height: 1;
+  letter-spacing: 0.05em;
+  color: var(--accent);
+  text-shadow: 0 0 22px color-mix(in oklch, var(--accent) 60%, transparent);
+  font-variant-numeric: tabular-nums;
+  background: var(--glass);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid color-mix(in oklch, var(--accent) 30%, transparent);
+  border-radius: 14px;
+  padding: 7px 24px;
+  box-shadow:
+    0 8px 28px rgba(0, 0, 0, 0.5),
+    0 0 24px color-mix(in oklch, var(--accent) 14%, transparent);
+}
+
+.hud-timer.is-warn {
+  color: var(--warn);
+  border-color: color-mix(in oklch, var(--warn) 48%, transparent);
+  text-shadow: 0 0 24px color-mix(in oklch, var(--warn) 65%, transparent);
+  animation: hud-timer-beat 1s ease infinite;
+}
+
+@keyframes hud-timer-beat {
+  50% {
+    transform: translateX(-50%) scale(1.05);
+  }
+}
+
+/* 右上排名 */
+.hud-rank {
+  position: absolute;
+  right: max(14px, env(safe-area-inset-right));
+  top: max(14px, env(safe-area-inset-top));
+  background: var(--glass);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 10px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  min-width: 208px;
+}
+
+.hud-rank-header {
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  color: var(--muted);
+  text-transform: uppercase;
+  padding: 2px 8px 8px;
+  display: flex;
+  justify-content: space-between;
+  font-weight: 600;
+}
+
+.rank-row {
+  display: grid;
+  grid-template-columns: 30px 34px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 9px;
+  border-radius: 11px;
+  margin-bottom: 3px;
+}
+
+.rank-row:last-child {
+  margin-bottom: 0;
+}
+
+.rank-row.is-player {
+  background: color-mix(in oklch, var(--accent) 14%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--accent) 36%, transparent);
+}
+
+.rank-row.is-eliminated,
+.rank-row.is-out {
+  filter: saturate(0.4);
+  opacity: 0.7;
+}
+
+.rank-row-position {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 18px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.rank-row.is-player .rank-row-position {
+  color: var(--accent);
+}
+
+.rank-row-avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--ink-on-accent);
+  background: linear-gradient(135deg, var(--surface-2), var(--surface));
+}
+
+.rank-row.is-player .rank-row-avatar {
+  background: linear-gradient(135deg, var(--accent), #bff6ff);
+}
+
+.rank-row.is-bot-one .rank-row-avatar {
+  background: linear-gradient(135deg, #ff8a3d, #ffd2a8);
+}
+
+.rank-row.is-bot-two .rank-row-avatar {
+  background: linear-gradient(135deg, #5aa9e6, #cfe8fb);
+}
+
+.rank-row-name {
+  min-width: 0;
+}
+
+.rank-row-name b {
+  display: block;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 96px;
+  line-height: 1.15;
+  color: var(--fg);
+}
+
+.rank-row-meta {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  letter-spacing: 0.03em;
+  font-weight: 600;
+  margin-top: 1px;
+}
+
+.rank-row.is-out .rank-row-meta {
+  color: var(--danger);
+}
+
+.rank-row-score {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 17px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  line-height: 1.15;
+  color: var(--fg);
+}
+
+.rank-row-score small {
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 600;
+  margin-top: 1px;
+}
+
+/* ===== 屏幕外 Bot 指示（玻璃药丸标签） ===== */
+.hud-arrows {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 15;
+}
+
+.direction-marker {
+  --marker-color: var(--accent);
+  position: absolute;
+  /* left/top 由 Game.ts 写入的 translate3d(x,y) 直接定位（x,y 已是相对视口左上的绝对像素）；
+     此处不能再用 50%/50%，否则会与 x,y 里的中心偏移叠加、把标记推出屏幕。 */
+  left: 0;
+  top: 0;
+}
+
+.direction-marker[hidden] {
+  display: none;
+}
+
+.direction-tag {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 14px;
+  background: oklch(9% 0.02 264 / 0.86);
+  border: 1.5px solid var(--marker-color);
+  border-radius: 14px;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  box-shadow: 0 0 18px color-mix(in oklch, var(--marker-color) 32%, transparent);
+  animation: direction-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes direction-pulse {
+  50% {
+    box-shadow: 0 0 30px color-mix(in oklch, var(--marker-color) 50%, transparent);
+  }
+}
+
+.bot-one-indicator {
+  --marker-color: #ff8a3d;
+}
+
+.bot-two-indicator {
+  --marker-color: #5aa9e6;
+}
+
+.direction-tag-icon {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  color: var(--marker-color);
+}
+
+.direction-tag-icon svg {
+  width: 24px;
+  height: 24px;
+  fill: none;
+  stroke: var(--marker-color);
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.direction-tag-name {
+  font-size: 17px;
+  font-weight: 700;
+  color: #fff;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.direction-tag-distance {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--marker-color);
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
+.direction-tag-arrow {
+  width: 34px;
+  height: 34px;
+  color: var(--marker-color);
+  filter: drop-shadow(0 0 9px var(--marker-color));
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  transform-origin: center;
+}
+
+.direction-tag-arrow svg {
+  width: 34px;
+  height: 34px;
+  fill: none;
+  stroke: var(--marker-color);
+  stroke-width: 5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* ===== 底部控件 ===== */
+.hud-controls {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: max(16px, env(safe-area-inset-bottom));
+  z-index: 25;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  padding: 0 max(16px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left));
+  gap: 12px;
+  pointer-events: none;
+}
+
+.hud-controls > * {
+  pointer-events: auto;
+}
+
+/* 左下按键 tips（仅桌面） */
+.hud-kbd {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 14px;
+  letter-spacing: 0.06em;
+  margin: 0 0 10px 8px;
+}
+
+.hud-kbd kbd {
+  display: inline-grid;
+  place-items: center;
+  min-width: 30px;
+  height: 30px;
+  padding: 0 8px;
+  border-radius: 8px;
+  background: var(--glass);
+  border: 1px solid var(--border-strong);
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--fg);
+}
+
+/* 右下技能卡 */
+.hud-skills {
+  display: flex;
+  align-items: flex-end;
+  gap: 14px;
+}
+
+.hud-skill {
+  --ability-progress: 0;
+  --skill-color: var(--accent);
+  position: relative;
+  width: 78px;
+  height: 78px;
+  border-radius: 20px;
+  display: grid;
+  place-items: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+  transition:
+    transform 0.12s,
+    box-shadow 0.2s,
+    filter 0.2s;
+  color: var(--fg);
+}
+
+.ability-speed {
+  --skill-color: var(--accent);
+}
+
+.ability-radius {
+  --skill-color: var(--accent-2);
+}
+
+.ability-bomb {
+  --skill-color: var(--danger);
+}
+
+.hud-skill:active {
+  transform: scale(0.94);
+}
+
+.hud-skill:disabled {
+  cursor: default;
+}
+
+.hud-skill-icon {
+  position: relative;
+  z-index: 3;
+  display: grid;
+  place-items: center;
+}
+
+.hud-skill-icon svg {
+  width: 38px;
+  height: 38px;
+  stroke: var(--skill-color);
+  stroke-width: 1.7;
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 0 6px color-mix(in oklch, var(--skill-color) 55%, transparent));
+  transition: 0.2s;
+}
+
+.hud-skill-key {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 4;
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 13px;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+
+.hud-skill-label {
+  position: absolute;
+  bottom: -21px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+
+.hud-skill-cd {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  width: calc(var(--ability-progress) * 1%);
+  background: linear-gradient(
+    90deg,
+    color-mix(in oklch, var(--skill-color) 42%, var(--surface-2)),
+    color-mix(in oklch, var(--skill-color) 82%, var(--surface))
+  );
+  box-shadow:
+    -3px 0 0 var(--skill-color),
+    -8px 0 16px color-mix(in oklch, var(--skill-color) 55%, transparent);
+  z-index: 1;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+
+.hud-skill-count {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  z-index: 5;
+  font-family: var(--font-display);
+  font-weight: 900;
+  font-size: 38px;
+  color: #fff;
+  text-shadow:
+    0 0 14px color-mix(in oklch, var(--accent) 78%, transparent),
+    0 2px 5px rgba(0, 0, 0, 0.85);
+  opacity: 0;
+}
+
+.hud-skill-status {
+  display: none;
+}
+
+.hud-skill.is-cooldown {
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+.hud-skill.is-cooldown .hud-skill-cd {
+  opacity: 1;
+}
+
+.hud-skill.is-cooldown .hud-skill-count {
+  opacity: 1;
+}
+
+.hud-skill.is-cooldown .hud-skill-icon {
+  opacity: 0.6;
+}
+
+.hud-skill.is-active {
+  background: radial-gradient(
+    circle at 50% 40%,
+    color-mix(in oklch, var(--skill-color) 55%, var(--surface)),
+    var(--surface)
+  );
+  border-color: var(--skill-color);
+  box-shadow:
+    0 0 30px var(--skill-color),
+    0 0 54px color-mix(in oklch, var(--skill-color) 36%, transparent),
+    0 8px 24px rgba(0, 0, 0, 0.5);
+  transform: scale(1.06);
+}
+
+.hud-skill.is-active .hud-skill-icon svg {
+  stroke: var(--skill-color);
+  stroke-width: 2;
+}
+
+.hud-skill.ability-bomb.is-active {
+  animation: hud-fuse-beat 0.5s ease-in-out infinite;
+}
+
+@keyframes hud-fuse-beat {
+  50% {
+    transform: scale(1.07);
+  }
+}
+
+/* ===== 吞噬 +分值 浮字 ===== */
+.hud-score-effects {
+  position: fixed;
+  inset: 0;
+  z-index: 7;
+  overflow: hidden;
+  pointer-events: none;
+  contain: strict;
+}
+
+.score-pop {
+  position: absolute;
+  color: var(--accent);
+  font-family: var(--font-display);
+  font-weight: 900;
+  font-size: clamp(22px, 3.6vw, 30px);
+  text-shadow: 0 0 16px color-mix(in oklch, var(--accent) 60%, transparent);
+  transform: translate(-50%, -50%);
+  will-change: transform, opacity;
+  animation: hud-score-rise 1.3s ease forwards;
+  white-space: nowrap;
+}
+
+.score-pop.is-kill {
+  color: var(--warn);
+  font-size: clamp(26px, 4.2vw, 36px);
+  text-shadow: 0 0 16px color-mix(in oklch, var(--warn) 65%, transparent);
+}
+
+@keyframes hud-score-rise {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -20%) scale(0.6);
+  }
+  16% {
+    opacity: 1;
+    transform: translate(-50%, -70%) scale(1.06);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -190%) scale(1);
+  }
+}
+
+/* ===== 技能反馈 toast ===== */
+.hud-ability-feedback {
+  position: absolute;
+  top: 92px;
+  left: 50%;
+  z-index: 8;
+  min-width: 238px;
+  padding: 11px 18px;
+  transform: translate(-50%, -12px);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  background: oklch(9% 0.018 264 / 0.9);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  color: var(--accent);
+  font-family: var(--font-display);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  opacity: 0;
+  pointer-events: none;
+  text-align: center;
+  transition:
+    opacity 180ms ease-out,
+    transform 180ms ease-out;
+}
+
+.hud-ability-feedback.is-visible {
+  transform: translate(-50%, 0);
+  opacity: 1;
+}
+
+.hud-ability-feedback[data-ability="radius"] {
+  color: var(--accent-2);
+  border-color: var(--accent-2);
+}
+
+.hud-ability-feedback[data-ability="bomb"] {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+/* ===== 移动端拖拽摇杆（InputController 动态定位） ===== */
+.drag-pad {
+  position: fixed;
+  z-index: 9;
+  display: none;
+  width: 120px;
+  height: 120px;
+  place-items: center;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    color-mix(in oklch, var(--surface-2) 70%, transparent),
+    color-mix(in oklch, var(--bg) 72%, transparent)
+  );
+  border: 1px solid var(--border);
+  backdrop-filter: blur(8px);
+  box-shadow:
+    0 10px 30px rgba(0, 0, 0, 0.5),
+    inset 0 0 30px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+}
+
+.drag-pad::before {
+  content: "";
+  position: absolute;
+  inset: 13px;
+  border-radius: 50%;
+  border: 1px dashed color-mix(in oklch, var(--accent) 30%, transparent);
+}
+
+.drag-pad.is-active {
+  display: grid;
+}
+
+.drag-knob {
+  width: 54px;
+  height: 54px;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle at 38% 32%,
+    color-mix(in oklch, var(--accent) 75%, #fff),
+    color-mix(in oklch, var(--accent) 50%, #000)
+  );
+  border: 1px solid color-mix(in oklch, var(--accent) 60%, transparent);
+  box-shadow: 0 0 22px color-mix(in oklch, var(--accent) 60%, transparent);
+  transform: translate(0, 0);
+}
+
+/* ===== 响应式 ===== */
+@media (max-width: 900px) {
+  .hud-rank {
+    min-width: 172px;
+  }
+  .rank-row-name b {
+    max-width: 64px;
+  }
+}
+
+@media (max-width: 680px) {
+  .hud-rank {
+    padding: 7px;
+    min-width: 0;
+  }
+  .hud-rank-header {
+    display: none;
+  }
+  .rank-row {
+    grid-template-columns: 22px 28px auto;
+    gap: 7px;
+    padding: 5px 6px;
+    margin-bottom: 2px;
+  }
+  .rank-row-avatar {
+    width: 28px;
+    height: 28px;
+    font-size: 12px;
+  }
+  .rank-row-name {
+    display: none;
+  }
+  .rank-row-score {
+    grid-column: 3;
+    font-size: 15px;
+  }
+  .rank-row-position {
+    font-size: 15px;
+  }
+  .hud-skill {
+    width: 66px;
+    height: 66px;
+    border-radius: 17px;
+  }
+  .hud-skill-icon svg {
+    width: 32px;
+    height: 32px;
+  }
+  .hud-skill-count {
+    font-size: 30px;
+  }
+  .hud-skill-key {
+    font-size: 12px;
+  }
+}
+
+@media (max-width: 420px) {
+  .hud-skills {
+    gap: 9px;
+  }
+  .hud-skill {
+    width: 60px;
+    height: 60px;
+  }
+  .hud-skill-icon svg {
+    width: 28px;
+    height: 28px;
+  }
+  .hud-skill-count {
+    font-size: 26px;
+  }
+  .hud-timer {
+    font-size: 30px;
+    padding: 7px 18px;
+  }
+}
+
+@media (pointer: fine) {
+  .hud-kbd {
+    display: flex;
+  }
+}

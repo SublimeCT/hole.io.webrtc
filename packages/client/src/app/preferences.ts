@@ -6,8 +6,8 @@ export interface GamePreferences {
 const PREFERENCES_KEY = "hole-city-player-preferences";
 
 export const DEFAULT_PREFERENCES: GamePreferences = {
-  playerName: "YOU",
-  playerRingColor: "#6ef2d0",
+  playerName: "玩家",
+  playerRingColor: "#2bf0ff",
 };
 
 export function loadPreferences(): GamePreferences {

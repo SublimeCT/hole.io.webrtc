@@ -1,22 +1,33 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactElement } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { loadPreferences, persistPreferences, type GamePreferences } from "../app/preferences";
 
-const COLORS = [
-  ["#6ef2d0", "color-mint", "薄荷绿"],
-  ["#ff7a63", "color-coral", "珊瑚红"],
-  ["#ffdf4d", "color-sun", "日光黄"],
-  ["#9c8cff", "color-violet", "紫罗兰"],
-  ["#5aa9ff", "color-blue", "天空蓝"],
-  ["#55d68b", "color-green", "青草绿"],
-  ["#ff9f43", "color-orange", "橙色"],
-  ["#ff80b5", "color-pink", "粉红"],
-  ["#e64e6e", "color-rose", "玫瑰红"],
-  ["#b7e64e", "color-lime", "青柠"],
-  ["#d7f4ff", "color-ice", "冰蓝"],
-  ["#c78a56", "color-bronze", "青铜"],
+const RING_COLORS = [
+  "#2bf0ff",
+  "#7c5cff",
+  "#ff5c8a",
+  "#ffd23f",
+  "#3ddc97",
+  "#ff8a3d",
+  "#5aa9e6",
+  "#c98ad1",
+  "#9ad1c9",
+  "#e06b5a",
+  "#b8c24d",
+  "#f2f2f2",
 ] as const;
+
+const REPO_URL = "https://github.com/";
+
+type MenuAction = "start" | "settings" | "share" | "online";
+
+interface MenuButton {
+  action: MenuAction;
+  title: string;
+  subtitle: string;
+  icon: ReactElement;
+}
 
 async function copyGameLink(url: string): Promise<void> {
   if (navigator.clipboard?.writeText) {
@@ -41,12 +52,62 @@ export function HomePage() {
   const [draftName, setDraftName] = useState(preferences.playerName);
   const [draftColor, setDraftColor] = useState(preferences.playerRingColor);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [onlineOpen, setOnlineOpen] = useState(false);
-  const [shareStatus, setShareStatus] = useState("");
   const [focusedMenu, setFocusedMenu] = useState(0);
+  const [toastMessage, setToastMessage] = useState("");
+  const [eatCount, setEatCount] = useState(2847193);
+  const [onlineCount, setOnlineCount] = useState(1204);
+
   const menuButtons = useRef<Array<HTMLButtonElement | null>>([]);
   const nameInput = useRef<HTMLInputElement>(null);
-  const onlineCloseButton = useRef<HTMLButtonElement>(null);
+  const miniLayer = useRef<HTMLDivElement>(null);
+  const holeScene = useRef<HTMLDivElement>(null);
+  const starsLayer = useRef<HTMLDivElement>(null);
+  const toastTimer = useRef<number | null>(null);
+
+  const buttons: readonly MenuButton[] = [
+    {
+      action: "start",
+      title: "开始游戏",
+      subtitle: "单机 · 3 人 · 3 分钟 · 1 次复活",
+      icon: (
+        <svg viewBox="0 0 24 24">
+          <path d="M7 4l13 8-13 8z" />
+        </svg>
+      ),
+    },
+    {
+      action: "settings",
+      title: "设置",
+      subtitle: "玩家名称 · 黑洞圆环颜色",
+      icon: (
+        <svg viewBox="0 0 24 24">
+          <circle cx="12" cy="12" r="3.2" />
+          <path d="M19 12a7 7 0 0 0-.1-1l2-1.6-2-3.4-2.4 1a7 7 0 0 0-1.7-1L14.5 2h-5l-.3 2.5a7 7 0 0 0-1.7 1l-2.4-1-2 3.4 2 1.6a7 7 0 0 0 0 2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 1.7 1l.3 2.5h5l.3-2.5a7 7 0 0 0 1.7-1l2.4 1 2-3.4-2-1.6a7 7 0 0 0 .1-1z" />
+        </svg>
+      ),
+    },
+    {
+      action: "share",
+      title: "分享链接",
+      subtitle: "复制本游戏链接给朋友",
+      icon: (
+        <svg viewBox="0 0 24 24">
+          <path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.5 1.5M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.5-1.5" />
+        </svg>
+      ),
+    },
+    {
+      action: "online",
+      title: "联机",
+      subtitle: "创建 / 加入房间（开发中）",
+      icon: (
+        <svg viewBox="0 0 24 24">
+          <circle cx="12" cy="12" r="9" />
+          <path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" />
+        </svg>
+      ),
+    },
+  ];
 
   useEffect(() => {
     menuButtons.current[focusedMenu]?.focus();
@@ -56,19 +117,114 @@ export function HomePage() {
     if (settingsOpen) nameInput.current?.focus();
   }, [settingsOpen]);
 
+  // 粒子（向右漂移，与网格节奏一致）
   useEffect(() => {
-    if (onlineOpen) onlineCloseButton.current?.focus();
-  }, [onlineOpen]);
+    const stars = starsLayer.current;
+    if (!stars) return;
+    const nodes: HTMLElement[] = [];
+    for (let i = 0; i < 70; i += 1) {
+      const s = document.createElement("div");
+      s.className = "home-star";
+      const size = Math.random() * 2.5 + 2;
+      s.style.width = `${size}px`;
+      s.style.height = `${size}px`;
+      s.style.left = `${Math.random() * 100}%`;
+      s.style.top = `${Math.random() * 100}%`;
+      if (i % 5 === 0) s.style.background = "var(--accent)";
+      else if (i % 7 === 0) s.style.background = "var(--accent-2)";
+      s.style.setProperty("--star-twinkle", `${Math.random() * 2.4 + 1.6}s`);
+      s.style.setProperty("--star-drift", `${Math.random() * 6 + 5}s`);
+      s.style.animationDelay = `${-Math.random() * 6}s`;
+      stars.append(s);
+      nodes.push(s);
+    }
+    return () => {
+      nodes.forEach((n) => n.remove());
+    };
+  }, []);
+
+  // 被吞噬的小黑洞：1/2 与 1/3 主洞尺寸，同速（一致时长）从左侧飞向主洞。
+  // 不缩小——到达中心时淡出表示“被吞噬”。
+  // 每次吞噬：持久累加 --feed-scale（主洞“略微变大”，transition 使其平滑）；
+  // 显示固定击杀浮字（+300 / +200）。
+  useEffect(() => {
+    const layer = miniLayer.current;
+    const scene = holeScene.current;
+    if (!layer || !scene) return;
+    const DURATION = 8; // 两洞同速
+    const configs = [
+      { size: "50%", y: "-9vh", delay: -0.8, glow: "is-cyan", score: "+300" },
+      { size: "33%", y: "9vh", delay: -3.2, glow: "is-amber", score: "+200" },
+    ];
+    let feedScale = 1;
+    const MAX_FEED = 1.4;
+    const onSwallow = (score: string) => {
+      feedScale = Math.min(MAX_FEED, feedScale + 0.03);
+      scene.style.setProperty("--feed-scale", feedScale.toString());
+      const pop = document.createElement("span");
+      pop.className = "home-kill-pop";
+      pop.textContent = score;
+      pop.addEventListener("animationend", () => pop.remove(), { once: true });
+      scene.append(pop);
+    };
+    const created: HTMLElement[] = [];
+    configs.forEach((config) => {
+      const hole = document.createElement("div");
+      hole.className = `home-mini-hole ${config.glow}`;
+      hole.style.setProperty("--mini-size", config.size);
+      hole.style.setProperty("--mini-duration", `${DURATION}s`);
+      hole.style.setProperty("--mini-y", config.y);
+      hole.style.animationDelay = `${config.delay}s`;
+      const glow = document.createElement("div");
+      glow.className = "home-mini-glow";
+      const core = document.createElement("div");
+      core.className = "home-mini-core";
+      hole.append(glow, core);
+      hole.addEventListener("animationiteration", () => onSwallow(config.score));
+      layer.append(hole);
+      created.push(hole);
+    });
+    return () => {
+      created.forEach((node) => node.remove());
+    };
+  }, []);
+
+  // 深渊实况动态计数。
+  useEffect(() => {
+    const eatInterval = window.setInterval(() => {
+      setEatCount((current) => current + Math.floor(Math.random() * 140 + 30));
+    }, 900);
+    const onlineInterval = window.setInterval(() => {
+      setOnlineCount((current) => Math.max(1180, current + (Math.floor(Math.random() * 7) - 3)));
+    }, 1500);
+    return () => {
+      window.clearInterval(eatInterval);
+      window.clearInterval(onlineInterval);
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimer.current !== null) {
+        window.clearTimeout(toastTimer.current);
+      }
+    };
+  }, []);
+
+  const showToast = (message: string): void => {
+    setToastMessage(message);
+    if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
+    toastTimer.current = window.setTimeout(() => setToastMessage(""), 2200);
+  };
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.ctrlKey || event.metaKey) return;
-      if (settingsOpen || onlineOpen) {
+      if (settingsOpen) {
         if (event.code === "Escape") {
           event.preventDefault();
           setSettingsOpen(false);
-          setOnlineOpen(false);
-          menuButtons.current[settingsOpen ? 1 : 2]?.focus();
+          menuButtons.current[1]?.focus();
         }
         return;
       }
@@ -80,17 +236,54 @@ export function HomePage() {
       ) {
         event.preventDefault();
         const offset = event.code === "ArrowUp" || event.code === "ArrowLeft" ? -1 : 1;
-        setFocusedMenu((current) => (current + offset + 4) % 4);
+        setFocusedMenu((current) => (current + offset + buttons.length) % buttons.length);
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onlineOpen, settingsOpen]);
+  }, [buttons.length, settingsOpen]);
 
-  const openSettings = (): void => {
-    setDraftName(preferences.playerName);
-    setDraftColor(preferences.playerRingColor);
-    setSettingsOpen(true);
+  const triggerAction = async (action: MenuAction): Promise<void> => {
+    switch (action) {
+      case "start":
+        navigate("/game");
+        return;
+      case "settings":
+        setDraftName(preferences.playerName);
+        setDraftColor(preferences.playerRingColor);
+        setSettingsOpen(true);
+        return;
+      case "share":
+        await shareGame();
+        return;
+      case "online":
+        showToast("联机模式开发中（Phase 3）");
+        return;
+    }
+  };
+
+  const shareGame = async (): Promise<void> => {
+    const url = `${window.location.origin}${window.location.pathname}#/`;
+    try {
+      if (navigator.share) {
+        await navigator.share({
+          title: "深渊 VOID",
+          text: "一个 hole.io 风格的吞噬对战小游戏",
+          url,
+        });
+        showToast("已打开分享面板");
+      } else {
+        await copyGameLink(url);
+        showToast("游戏链接已复制");
+      }
+    } catch {
+      try {
+        await copyGameLink(url);
+        showToast("游戏链接已复制");
+      } catch {
+        showToast("暂时无法分享链接");
+      }
+    }
   };
 
   const submitSettings = (event: FormEvent<HTMLFormElement>): void => {
@@ -109,189 +302,173 @@ export function HomePage() {
     menuButtons.current[1]?.focus();
   };
 
-  const shareGame = async (): Promise<void> => {
-    const url = `${window.location.origin}${window.location.pathname}#/`;
-    try {
-      if (navigator.share) {
-        await navigator.share({ title: "Hole City", text: "来吞掉这座城市", url });
-        setShareStatus("已打开分享面板");
-      } else {
-        await copyGameLink(url);
-        setShareStatus("游戏链接已复制");
-      }
-    } catch {
-      try {
-        await copyGameLink(url);
-        setShareStatus("游戏链接已复制");
-      } catch {
-        setShareStatus("暂时无法分享链接");
-      }
-    }
-  };
-
   return (
-    <main className="app-shell is-menu">
-      <div className="screen-texture" aria-hidden="true" />
-      <section className="overlay menu-overlay" aria-label="开局菜单">
-        <div className="menu-copy">
-          <span className="kicker">SINK CITY / COMPETITIVE RUN</span>
-          <h1>吞城计划</h1>
-          <p>三分钟城市吞噬竞技</p>
-          <div className="menu-actions">
-            <button
-              ref={(element) => {
-                menuButtons.current[0] = element;
-              }}
-              className={`primary-command ${focusedMenu === 0 ? "is-menu-focused" : ""}`}
-              type="button"
-              onFocus={() => setFocusedMenu(0)}
-              onClick={() => navigate("/game")}
-            >
-              <span>开始游戏</span>
-            </button>
-            <button
-              ref={(element) => {
-                menuButtons.current[1] = element;
-              }}
-              className={`secondary-command ${focusedMenu === 1 ? "is-menu-focused" : ""}`}
-              type="button"
-              onFocus={() => setFocusedMenu(1)}
-              onClick={openSettings}
-            >
-              <span>设置</span>
-            </button>
-            <button
-              ref={(element) => {
-                menuButtons.current[2] = element;
-              }}
-              className={`secondary-command ${focusedMenu === 2 ? "is-menu-focused" : ""}`}
-              type="button"
-              onFocus={() => setFocusedMenu(2)}
-              onClick={() => setOnlineOpen(true)}
-            >
-              <span>联机游玩</span>
-            </button>
-            <button
-              ref={(element) => {
-                menuButtons.current[3] = element;
-              }}
-              className={`secondary-command ${focusedMenu === 3 ? "is-menu-focused" : ""}`}
-              type="button"
-              onFocus={() => setFocusedMenu(3)}
-              onClick={() => void shareGame()}
-            >
-              <span>分享游戏</span>
-            </button>
-            <span className="menu-status" role="status" aria-live="polite">
-              {shareStatus}
-            </span>
-          </div>
+    <main className="home">
+      <div className="home-bg" aria-hidden="true">
+        <div className="home-bg-grid" />
+        <div className="home-stars" ref={starsLayer} />
+        <div className="home-hole-scene" ref={holeScene}>
+          <div className="home-hole-glow" />
+          <div className="home-hole-ring" />
+          <div className="home-hole-core" />
+          <div className="home-mini-layer" ref={miniLayer} />
         </div>
-        <aside className="menu-brief" aria-label="对局信息">
-          <span className="panel-label">MATCH BRIEF</span>
-          <strong>单机对局</strong>
-          <div className="brief-grid">
-            <span>
-              <b>03</b> 玩家
-            </span>
-            <span>
-              <b>03:00</b> 时长
-            </span>
-            <span>
-              <b>01</b> 次复活
+        <div className="home-bg-fade" />
+      </div>
+
+      <div className="home-wrap">
+        <header className="home-topbar">
+          <div className="home-brand">
+            <div className="home-brand-mark" />
+            <div className="home-brand-name">VOID</div>
+          </div>
+          <div className="home-top-actions">
+            <a
+              className="home-gh-btn"
+              href={REPO_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="GitHub 开源仓库"
+              title="GitHub 开源仓库"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 1C5.92 1 1 5.92 1 12c0 4.86 3.15 8.98 7.52 10.44.55.1.75-.24.75-.53 0-.26-.01-.95-.02-1.86-3.06.66-3.71-1.48-3.71-1.48-.5-1.27-1.22-1.61-1.22-1.61-1-.68.08-.67.08-.67 1.1.08 1.68 1.13 1.68 1.13.98 1.68 2.57 1.2 3.2.92.1-.71.38-1.2.69-1.48-2.44-.28-5.01-1.22-5.01-5.43 0-1.2.43-2.18 1.13-2.95-.11-.28-.49-1.4.11-2.92 0 0 .92-.3 3.02 1.13a10.5 10.5 0 0 1 5.5 0c2.1-1.43 3.02-1.13 3.02-1.13.6 1.52.22 2.64.11 2.92.7.77 1.13 1.75 1.13 2.95 0 4.22-2.57 5.15-5.02 5.42.39.34.74 1.01.74 2.04 0 1.47-.01 2.66-.01 3.02 0 .29.2.64.76.53A11 11 0 0 0 23 12c0-6.08-4.92-11-11-11z" />
+              </svg>
+              <span className="home-gh-label">GitHub</span>
+            </a>
+          </div>
+        </header>
+
+        <section className="home-main">
+          <span className="home-kicker">深渊吞噬 · 3 人对决</span>
+          <h1 className="home-title">
+            V<span className="home-title-o">O</span>ID
+          </h1>
+          <p className="home-tagline">
+            控制地面上的虚空之洞，吞噬建筑、车辆与对手——3 分钟内，做最大的那一个。
+          </p>
+          <nav className="home-menu" aria-label="主菜单">
+            {buttons.map((button, index) => (
+              <button
+                key={button.action}
+                ref={(element) => {
+                  menuButtons.current[index] = element;
+                }}
+                className={`home-mbtn ${focusedMenu === index ? "is-focused" : ""}`}
+                type="button"
+                onFocus={() => setFocusedMenu(index)}
+                onClick={() => void triggerAction(button.action)}
+              >
+                <span className="home-mbtn-icon">{button.icon}</span>
+                <span className="home-mbtn-text">
+                  <span className="home-mbtn-title">{button.title}</span>
+                  <span className="home-mbtn-sub">{button.subtitle}</span>
+                </span>
+                <span className="home-mbtn-enter">
+                  按 <kbd className="home-mbtn-key">Enter</kbd>
+                </span>
+              </button>
+            ))}
+          </nav>
+        </section>
+
+        <aside className="home-livecard" aria-label="深渊实况">
+          <div className="home-lc-head">
+            <span className="home-lc-title">深渊实况</span>
+            <span className="home-lc-live">LIVE</span>
+          </div>
+          <div className="home-lc-row">
+            <span className="home-lc-label">今日已吞噬建筑</span>
+            <span className="home-lc-value home-lc-value-accent">{eatCount.toLocaleString()}</span>
+          </div>
+          <div className="home-lc-row">
+            <span className="home-lc-label">当前在线黑洞</span>
+            <span className="home-lc-value">{onlineCount.toLocaleString()}</span>
+          </div>
+          <div className="home-lc-row">
+            <span className="home-lc-label">你的最佳体积</span>
+            <span className="home-lc-value home-lc-value-gold">
+              Lv.9<small>· 12.6m</small>
             </span>
           </div>
-          <i>城市吞噬赛</i>
+          <div className="home-lc-spark" aria-hidden="true">
+            {Array.from({ length: 9 }, (_, index) => (
+              <i key={index} />
+            ))}
+          </div>
         </aside>
-      </section>
+      </div>
 
-      <section className="dialog-layer" aria-labelledby="settings-title" hidden={!settingsOpen}>
-        <form className="dialog-sheet" onSubmit={submitSettings}>
-          <header>
-            <span className="result-mark">*</span>
-            <div>
-              <span className="kicker">PLAYER PROFILE</span>
-              <h2 id="settings-title">设置</h2>
+      {settingsOpen && (
+        <div
+          className="home-modal"
+          role="dialog"
+          aria-label="设置"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) setSettingsOpen(false);
+          }}
+        >
+          <form className="home-modal-sheet" onSubmit={submitSettings}>
+            <h2>设置</h2>
+            <div className="home-field">
+              <label className="home-field-label" htmlFor="player-name">
+                玩家名称（1–9 字）
+              </label>
+              <input
+                ref={nameInput}
+                id="player-name"
+                className="home-field-input"
+                type="text"
+                minLength={1}
+                maxLength={9}
+                defaultValue={draftName}
+                autoComplete="nickname"
+                required
+                onChange={(event) => {
+                  event.currentTarget.setCustomValidity("");
+                  setDraftName(event.currentTarget.value);
+                }}
+              />
+              <div className="home-field-hint">将在对局排名与结算中显示</div>
             </div>
-          </header>
-          <label className="settings-field" htmlFor="player-name">
-            <span>玩家名称</span>
-            <input
-              ref={nameInput}
-              id="player-name"
-              name="player-name"
-              minLength={1}
-              maxLength={9}
-              autoComplete="nickname"
-              required
-              value={draftName}
-              onChange={(event) => {
-                event.currentTarget.setCustomValidity("");
-                setDraftName(event.currentTarget.value);
-              }}
-            />
-          </label>
-          <fieldset className="color-picker">
-            <legend>黑洞圆环</legend>
-            <div>
-              {COLORS.map(([color, className, label]) => (
-                <button
-                  key={color}
-                  className={`color-swatch ${className} ${draftColor === color ? "is-selected" : ""}`}
-                  type="button"
-                  aria-label={label}
-                  aria-pressed={draftColor === color}
-                  onClick={() => setDraftColor(color)}
-                />
-              ))}
+            <div className="home-field">
+              <label className="home-field-label">黑洞圆环颜色（12 款）</label>
+              <div className="home-swatches">
+                {RING_COLORS.map((color) => (
+                  <button
+                    key={color}
+                    className={`home-swatch ${draftColor === color ? "is-on" : ""}`}
+                    type="button"
+                    aria-label={`圆环颜色 ${color}`}
+                    aria-pressed={draftColor === color}
+                    style={{ background: color }}
+                    onClick={() => setDraftColor(color)}
+                  />
+                ))}
+              </div>
             </div>
-          </fieldset>
-          <footer className="dialog-actions">
-            <button
-              className="text-command"
-              type="button"
-              onClick={() => {
-                setSettingsOpen(false);
-                requestAnimationFrame(() => menuButtons.current[1]?.focus());
-              }}
-            >
-              <span>取消</span>
-              <b className="key-hint">ESC</b>
-            </button>
-            <button className="primary-command" type="submit">
-              <span>保存设置</span>
-              <b className="key-hint">ENTER</b>
-            </button>
-          </footer>
-        </form>
-      </section>
-
-      <section className="dialog-layer" aria-labelledby="online-title" hidden={!onlineOpen}>
-        <div className="dialog-sheet dialog-notice">
-          <header>
-            <span className="result-mark">!</span>
-            <div>
-              <span className="kicker">ONLINE MODE</span>
-              <h2 id="online-title">开发中</h2>
+            <div className="home-modal-actions">
+              <button className="home-btn" type="button" onClick={() => setSettingsOpen(false)}>
+                取消 (Esc)
+              </button>
+              <button className="home-btn home-btn-primary" type="submit">
+                保存 (Enter)
+              </button>
             </div>
-          </header>
-          <p>联机竞技正在准备中。当前可直接开始单机对局。</p>
-          <footer className="dialog-actions">
-            <button
-              ref={onlineCloseButton}
-              className="primary-command"
-              type="button"
-              onClick={() => {
-                setOnlineOpen(false);
-                requestAnimationFrame(() => menuButtons.current[2]?.focus());
-              }}
-            >
-              <span>关闭</span>
-              <b className="key-hint">ESC</b>
-            </button>
-          </footer>
+          </form>
         </div>
-      </section>
+      )}
+
+      <div
+        className={`home-toast ${toastMessage ? "is-visible" : ""}`}
+        role="status"
+        aria-live="polite"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M20 6 9 17l-5-5" />
+        </svg>
+        <span>{toastMessage}</span>
+      </div>
     </main>
   );
 }

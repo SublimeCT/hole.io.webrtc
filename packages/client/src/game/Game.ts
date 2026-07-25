@@ -25,23 +25,11 @@ import type { MatchResult } from "../app/matchResult";
 import type { GamePreferences } from "../app/preferences";
 import { CityObjectRenderer } from "./CityObjectRenderer";
 import { Feedback } from "./Feedback";
+import { HoleRenderer } from "./HoleRenderer";
 import { InputController } from "./InputController";
 
 const FIXED_STEP_SECONDS = 1 / 60;
 const MAX_FRAME_SECONDS = 0.1;
-
-interface HoleVisual {
-  group: THREE.Group;
-  progressMesh: THREE.Mesh;
-  crown: THREE.Sprite;
-  shaft: THREE.Mesh;
-  depth: THREE.Mesh;
-  ringMaterials: readonly [THREE.MeshBasicMaterial];
-  progressValue: number;
-  speedRing: THREE.Mesh;
-  radiusRing: THREE.Mesh;
-  bombRing: THREE.Mesh;
-}
 
 export interface GameUi {
   score: HTMLElement;
@@ -50,6 +38,7 @@ export interface GameUi {
   growthCopy: HTMLElement;
   growthFill: HTMLElement;
   time: HTMLElement;
+  timerRoot: HTMLElement;
   rankingRows: readonly [RankingRowUi, RankingRowUi, RankingRowUi];
   dragPad: HTMLElement;
   dragKnob: HTMLElement;
@@ -71,7 +60,9 @@ export interface AbilityButtonUi {
 export interface RankingRowUi {
   root: HTMLElement;
   position: HTMLElement;
+  avatar: HTMLElement;
   name: HTMLElement;
+  meta: HTMLElement;
   score: HTMLElement;
 }
 
@@ -90,7 +81,7 @@ export class Game {
   readonly #input: InputController;
   readonly #feedback = new Feedback();
   readonly #cityObjects: CityObjectRenderer;
-  readonly #holeVisuals = new Map<string, HoleVisual>();
+  readonly #holeRenderer: HoleRenderer;
   readonly #geometries = new Set<THREE.BufferGeometry>();
   readonly #materials = new Set<THREE.Material>();
   readonly #textures = new Set<THREE.Texture>();
@@ -114,6 +105,7 @@ export class Game {
   readonly #pendingAbilities = new Set<AbilityId>();
   #abilityFeedbackTimer: number | null = null;
   #lastBombFuseRemaining = 0;
+  #playerSwallowCount = 0;
 
   private constructor(
     canvas: HTMLCanvasElement,
@@ -140,8 +132,9 @@ export class Game {
     this.#renderer.autoClear = false;
     this.#input = new InputController(canvas, ui.dragPad, ui.dragKnob);
     this.#cityObjects = new CityObjectRenderer(this.#scene);
+    this.#holeRenderer = new HoleRenderer(this.#scene, preferences);
     this.#buildScene();
-    this.#buildHoleVisuals();
+    this.#holeRenderer.build(initialState.holes);
     this.#resize();
     this.#syncScene(1);
     this.#updateHud();
@@ -206,6 +199,7 @@ export class Game {
     this.#input.dispose();
     this.#feedback.dispose();
     this.#cityObjects.dispose();
+    this.#holeRenderer.dispose();
     this.#geometries.forEach((geometry) => geometry.dispose());
     this.#materials.forEach((material) => material.dispose());
     this.#textures.forEach((texture) => texture.dispose());
@@ -283,153 +277,6 @@ export class Game {
 
     this.#camera.position.copy(this.#cameraOffset);
     this.#camera.lookAt(0, 0, 0);
-  }
-
-  #buildHoleVisuals(): void {
-    for (const hole of this.#state.holes) {
-      const visual = this.#createHoleVisual(hole);
-      this.#holeVisuals.set(hole.id, visual);
-      this.#scene.add(visual.group);
-    }
-  }
-
-  #createHoleVisual(hole: HoleState): HoleVisual {
-    const group = new THREE.Group();
-    const maskGeometry = new THREE.CircleGeometry(1, 96);
-    const maskMaterial = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false });
-    maskMaterial.stencilWrite = true;
-    maskMaterial.stencilRef = 1;
-    maskMaterial.stencilFunc = THREE.AlwaysStencilFunc;
-    maskMaterial.stencilZPass = THREE.ReplaceStencilOp;
-    maskMaterial.depthTest = false;
-    const mask = new THREE.Mesh(maskGeometry, maskMaterial);
-    mask.rotation.x = -Math.PI / 2;
-    mask.position.y = 0.001;
-    mask.renderOrder = -12;
-    group.add(mask);
-
-    const shaftGeometry = new THREE.CylinderGeometry(1, 1, 6.8, 96, 1, true);
-    const shaftMaterial = new THREE.MeshBasicMaterial({
-      color: 0x000000,
-      transparent: true,
-      opacity: 0.82,
-      side: THREE.BackSide,
-      depthWrite: false,
-      depthTest: true,
-    });
-    const shaft = new THREE.Mesh(shaftGeometry, shaftMaterial);
-    shaft.position.y = -3.4;
-    shaft.renderOrder = -8;
-    group.add(shaft);
-
-    const depthGeometry = new THREE.CircleGeometry(1, 96);
-    const depthMaterial = new THREE.MeshBasicMaterial({
-      color: 0x000000,
-      transparent: true,
-      opacity: 0.82,
-      depthWrite: false,
-      depthTest: true,
-    });
-    const depth = new THREE.Mesh(depthGeometry, depthMaterial);
-    depth.rotation.x = -Math.PI / 2;
-    depth.position.y = -6.8;
-    depth.renderOrder = -9;
-    group.add(depth);
-
-    const color =
-      hole.kind === "human"
-        ? this.#preferences.playerRingColor
-        : hole.id === "bot-1"
-          ? 0xff6b4a
-          : 0xffd447;
-    const progressGeometry = new THREE.RingGeometry(1.06, 1.19, 96, 1, -Math.PI / 2, 0.001);
-    const progressMaterial = new THREE.MeshBasicMaterial({
-      color,
-      transparent: true,
-      opacity: 0.9,
-      side: THREE.DoubleSide,
-      depthWrite: false,
-      depthTest: false,
-    });
-    const progressMesh = new THREE.Mesh(progressGeometry, progressMaterial);
-    progressMesh.rotation.x = -Math.PI / 2;
-    progressMesh.position.y = 0.006;
-    progressMesh.renderOrder = 4;
-    group.add(progressMesh);
-
-    const createAbilityRing = (color: number, inner: number, outer: number): THREE.Mesh => {
-      const geometry = new THREE.RingGeometry(inner, outer, 96);
-      const material = new THREE.MeshBasicMaterial({
-        color,
-        transparent: true,
-        opacity: 0.9,
-        side: THREE.DoubleSide,
-        depthWrite: false,
-        depthTest: false,
-      });
-      const ring = new THREE.Mesh(geometry, material);
-      ring.rotation.x = -Math.PI / 2;
-      ring.position.y = 0.012;
-      ring.visible = false;
-      ring.renderOrder = 5;
-      group.add(ring);
-      this.#geometries.add(geometry);
-      this.#materials.add(material);
-      return ring;
-    };
-    const speedRing = createAbilityRing(0x7ce7ff, 1.28, 1.34);
-    const radiusRing = createAbilityRing(0xc5a7ff, 1.4, 1.47);
-    const bombRing = createAbilityRing(0xff5b57, 1.52, 1.62);
-
-    [maskGeometry, shaftGeometry, depthGeometry, progressGeometry].forEach((geometry) =>
-      this.#geometries.add(geometry),
-    );
-    [maskMaterial, shaftMaterial, depthMaterial, progressMaterial].forEach((material) =>
-      this.#materials.add(material),
-    );
-    const crown = this.#createCrown();
-    group.add(crown);
-    return {
-      group,
-      progressMesh,
-      crown,
-      shaft,
-      depth,
-      ringMaterials: [progressMaterial],
-      progressValue: -1,
-      speedRing,
-      radiusRing,
-      bombRing,
-    };
-  }
-
-  #createCrown(): THREE.Sprite {
-    const canvas = document.createElement("canvas");
-    canvas.width = 256;
-    canvas.height = 256;
-    const context = canvas.getContext("2d");
-    if (context) {
-      context.font = "176px 'Apple Color Emoji', 'Segoe UI Emoji', sans-serif";
-      context.textAlign = "center";
-      context.textBaseline = "middle";
-      context.fillText("👑", 128, 126);
-    }
-    const texture = new THREE.CanvasTexture(canvas);
-    texture.colorSpace = THREE.SRGBColorSpace;
-    const material = new THREE.SpriteMaterial({
-      map: texture,
-      transparent: true,
-      depthWrite: false,
-      depthTest: false,
-    });
-    const crown = new THREE.Sprite(material);
-    crown.position.y = 0.9;
-    crown.scale.setScalar(0.95);
-    crown.renderOrder = 6;
-    crown.visible = false;
-    this.#textures.add(texture);
-    this.#materials.add(material);
-    return crown;
   }
 
   #createGroundMaterial(color: number, unlit = false): THREE.Material {
@@ -552,50 +399,7 @@ export class Game {
         }
         return left.kind === "human" ? -1 : 1;
       })[0];
-    for (const hole of this.#state.holes) {
-      const visual = this.#holeVisuals.get(hole.id);
-      if (!visual) {
-        continue;
-      }
-      visual.group.visible = hole.eliminationRemaining <= 0 && !hole.isOut;
-      if (!visual.group.visible) {
-        continue;
-      }
-      visual.ringMaterials[0].opacity = hole.invulnerabilityRemaining > 0 ? 1 : 0.9;
-      visual.group.position.set(hole.position.x, 0, hole.position.y);
-      visual.group.scale.set(hole.radius, 1, hole.radius);
-      const isPlayer = hole.id === "player";
-      visual.speedRing.visible = isPlayer && hole.speedBoostRemaining > 0;
-      visual.radiusRing.visible = isPlayer && hole.radiusBoostRemaining > 0;
-      visual.bombRing.visible = isPlayer && hole.bombFuseRemaining > 0;
-      visual.speedRing.scale.setScalar(1.08 + Math.sin(this.#state.elapsed * 12) * 0.035);
-      visual.radiusRing.scale.setScalar(1.2 + Math.sin(this.#state.elapsed * 7) * 0.05);
-      visual.bombRing.scale.setScalar(1.15 + Math.sin(this.#state.elapsed * 18) * 0.1);
-      visual.crown.visible = leader?.id === hole.id;
-      visual.crown.position.y = 0.75 + hole.radius * 0.18;
-      visual.crown.scale.set(0.95, 0.95 * hole.radius, 0.95);
-      visual.shaft.scale.y = hole.radius;
-      visual.shaft.position.y = -3.4 * hole.radius;
-      visual.depth.position.y = -6.8 * hole.radius;
-      const holeProgress = getHoleProgress(hole.score);
-      const progress = holeProgress.progress;
-      if (Math.abs(progress - visual.progressValue) >= 0.005) {
-        const oldGeometry = visual.progressMesh.geometry;
-        const geometry = new THREE.RingGeometry(
-          1.06,
-          1.19,
-          96,
-          1,
-          -Math.PI / 2,
-          Math.max(0.001, progress * Math.PI * 2),
-        );
-        visual.progressMesh.geometry = geometry;
-        this.#geometries.delete(oldGeometry);
-        oldGeometry.dispose();
-        this.#geometries.add(geometry);
-        visual.progressValue = progress;
-      }
-    }
+    this.#holeRenderer.sync(this.#state.holes, this.#state.elapsed, deltaSeconds, leader?.id);
 
     const player = this.#state.holes.find((hole) => hole.id === "player");
     if (!player) {
@@ -687,6 +491,7 @@ export class Game {
     const minutes = Math.floor(totalSeconds / 60);
     const seconds = totalSeconds % 60;
     this.#ui.time.textContent = `${minutes}:${seconds.toString().padStart(2, "0")}`;
+    this.#ui.timerRoot.classList.toggle("is-warn", totalSeconds > 0 && totalSeconds <= 15);
     const rankableHoles = [...this.#state.holes].sort((left, right) => {
       if (right.score !== left.score) {
         return right.score - left.score;
@@ -757,12 +562,18 @@ export class Game {
       if (!hole) {
         return;
       }
-      row.position.textContent = (index + 1).toString().padStart(2, "0");
-      row.name.textContent =
+      row.position.textContent = (index + 1).toString();
+      const displayName =
         hole.kind === "human"
-          ? this.#preferences.playerName.toUpperCase()
+          ? this.#preferences.playerName
           : `BOT ${hole.id.slice(4).padStart(2, "0")}`;
-      row.score.textContent = hole.score.toString().padStart(5, "0");
+      const holeProgress = getHoleProgress(hole.score);
+      row.avatar.textContent = displayName.charAt(0).toUpperCase() || "·";
+      row.name.textContent = displayName.toUpperCase();
+      row.meta.textContent = hole.isOut
+        ? `Lv.${holeProgress.level + 1} · 出局`
+        : `Lv.${holeProgress.level + 1} · R${hole.radius.toFixed(1)}`;
+      row.score.textContent = hole.score.toString();
       row.root.classList.toggle("is-player", hole.kind === "human");
       row.root.classList.toggle("is-bot-one", hole.id === "bot-1");
       row.root.classList.toggle("is-bot-two", hole.id === "bot-2");
@@ -777,11 +588,13 @@ export class Game {
     if (event.holeId !== "player") {
       return;
     }
+    this.#playerSwallowCount += 1;
     this.#feedback.swallow();
     this.#scoreWorldPosition.set(event.position.x, 0.5, event.position.y).project(this.#camera);
     const rect = this.#canvas.getBoundingClientRect();
     const popup = document.createElement("span");
-    popup.className = "score-pop";
+    // 大分值（吞噬玩家所得 max(12, loser×0.6)）按击杀样式高亮，纯前端启发式。
+    popup.className = `score-pop${event.value > 50 ? " is-kill" : ""}`;
     popup.textContent = `+${event.value}`;
     popup.style.left = `${((this.#scoreWorldPosition.x + 1) / 2) * rect.width}px`;
     popup.style.top = `${((-this.#scoreWorldPosition.y + 1) / 2) * rect.height}px`;
@@ -807,10 +620,15 @@ export class Game {
         isOut: hole.isOut,
       }));
     const playerIndex = ranking.findIndex((entry) => entry.isPlayer);
+    const playerHole = this.#state.holes.find((hole) => hole.id === "player");
     return {
       playerRank: Math.max(1, playerIndex + 1),
       playerScore: ranking[playerIndex]?.score ?? 0,
       ranking,
+      swallowCount: this.#playerSwallowCount,
+      eliminations: playerHole?.eliminations ?? 0,
+      elapsedSeconds: this.#state.elapsed,
+      maxRevives: 1,
     };
   }
 
