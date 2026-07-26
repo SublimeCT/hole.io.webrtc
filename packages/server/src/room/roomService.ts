@@ -201,6 +201,17 @@ export class RoomService {
     return { ok: true, value: room };
   }
 
+  updateProfile(peerId: PeerId, profile: PlayerProfile): RoomResult<Room> {
+    const room = this.roomForPeer(peerId);
+    if (room === undefined) return { ok: false, error: "NOT_IN_ROOM" };
+    if (room.status !== "lobby") return { ok: false, error: "INVALID_STATE" };
+    const member = room.members.get(peerId);
+    if (member === undefined || !member.entered) return { ok: false, error: "NOT_IN_ROOM" };
+    member.profile = profile;
+    member.ready = false;
+    return { ok: true, value: room };
+  }
+
   async beginConnection(peerId: PeerId): Promise<RoomResult<Room>> {
     const room = this.roomForPeer(peerId);
     if (room === undefined) return { ok: false, error: "NOT_IN_ROOM" };

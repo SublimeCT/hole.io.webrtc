@@ -23,6 +23,7 @@ const schema = Type.Object({
   TURN_SECRET: Type.String({ minLength: 32 }),
   TURN_TTL_SECONDS: Type.Integer({ default: 3600, minimum: 60, maximum: 86_400 }),
   TURN_REALM: Type.String({ default: "hole.io", minLength: 1, maxLength: 253 }),
+  STUN_URIS: Type.String({ minLength: 1 }),
   TURN_URIS: Type.String({ minLength: 1 }),
 });
 

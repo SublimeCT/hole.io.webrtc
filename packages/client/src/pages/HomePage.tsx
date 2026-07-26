@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactElement } from "react";
 import { useNavigate } from "react-router-dom";
+import { PLAYER_NAME_PATTERN } from "@hole-io/shared/protocol";
 
 import { loadPreferences, persistPreferences, type GamePreferences } from "../app/preferences";
 import {
@@ -298,8 +299,9 @@ export function HomePage() {
 
   const submitSettings = (event: FormEvent<HTMLFormElement>): void => {
     event.preventDefault();
-    const playerName = draftName.trim();
-    if (playerName.length < 1 || playerName.length > 9) {
+    const playerName = draftName.normalize("NFKC").trim();
+    const playerNameLength = Array.from(playerName).length;
+    if (playerNameLength < 2 || playerNameLength > 10 || !PLAYER_NAME_PATTERN.test(playerName)) {
       nameInput.current?.setCustomValidity(translate(preferences.language, "nameInvalid"));
       nameInput.current?.reportValidity();
       return;
@@ -438,8 +440,8 @@ export function HomePage() {
                 id="player-name"
                 className="home-field-input"
                 type="text"
-                minLength={1}
-                maxLength={9}
+                minLength={2}
+                maxLength={10}
                 defaultValue={draftName}
                 autoComplete="nickname"
                 required

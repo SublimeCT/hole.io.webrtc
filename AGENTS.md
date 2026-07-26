@@ -27,10 +27,10 @@
 ### 后端
 
 - **语言**：Node.js + TypeScript（不用 Rust —— 后端职责薄，全是 I/O 转发/存储，用不上 Rust 的性能优势，反而拖慢 agent 迭代速度）。
-- **进程**：一个 **Fastify** 进程同时承担信令 WebSocket（`@fastify/websocket`）和存档 REST API，不单独起两个服务，省一份常驻内存开销，部署也更简单（一个 PM2 进程）。
+- **进程**：一个 **Fastify** 进程同时承担信令 WebSocket（`@fastify/websocket`）和存档 REST API，不单独起两个服务。Ubuntu 生产环境使用一个 systemd 服务，不使用 PM2、Node cluster 或 Docker。
 - **不用 socket.io**：信令消息就是几种简单 JSON 转发，原始 WebSocket 够用，不需要 socket.io 那套自动重连/命名空间机制。
 - **数据库**：PostgreSQL（用户和数据库名均为 `holeio`），连接池使用 `pg` / `@fastify/postgres`，查询和 migration 使用 **Drizzle**。密码、连接串、TURN secret 等敏感信息只从环境变量、`.env.local` 或 `.env` 读取。
-- **TURN/STUN**：`coturn`，独立 Docker 容器，不是我们写代码的部分。
+- **TURN/STUN**：`coturn`，在 Ubuntu 生产机上使用原生 systemd 服务；coturn 本身不是我们写代码的部分。
 
 ### 联机协议
 
@@ -80,9 +80,7 @@ pnpm workspace，不引入 Nx/Turborepo 这类重工具（项目规模用不上�
   /maps                     # 地图编辑器导出的 JSON
 
 /infra
-  docker-compose.yml         # coturn + server + nginx
-  coturn.conf
-  nginx.conf
+  /coturn                    # 原生 coturn 配置模板
 
 /.claude/skills             # 见第 5 节
 SPEC.md                      # 见第 6 节
@@ -141,7 +139,7 @@ AGENTS.md                    # 本文件
 
 - **Host 作弊**：host 是在玩家自己浏览器里跑的代码，没有中立方审计，理论上可以偷改自己的分数/体积再广播。缓解手段（限速、异常值检测）可以做，但不要指望能根除，这是纯 P2P 架构的结构性代价。
 - **存档经济系统可被篡改**：没有权威对战服务器验证"这局分数是不是真实打出来的"，客户端理论上可以伪造事件请求刷金币。第 4 节的"事件化 + 频率限制"是缓解手段，不是根治方案。
-- **TURN 带宽是硬约束**：阿里云轻量服务器的带宽/月流量有限，TURN 中继连接数存在上限，上线后要用 coturn 日志监控实际用量，不要只信理论计算。
+- **TURN 带宽是硬约束**：TURN 中继连接数和流量存在部署上限，上线后要用 coturn 日志监控实际用量，不要只信理论计算。
 - **Host 掉线 = 房间解散**：v1 不做 host 迁移，掉线直接结算/解散，所有人回退单机继续。
 
 ## 9. 给 agent 的编码约定

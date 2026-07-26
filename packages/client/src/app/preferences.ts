@@ -1,3 +1,4 @@
+import { PLAYER_NAME_PATTERN } from "@hole-io/shared/protocol";
 import { isLanguage, type Language } from "./i18n";
 
 export interface GamePreferences {
@@ -7,6 +8,7 @@ export interface GamePreferences {
 }
 
 const PREFERENCES_KEY = "hole-city-player-preferences";
+const PLAYER_COLOR_PATTERN = /^#[0-9A-Fa-f]{6}$/;
 
 export const DEFAULT_PREFERENCES: GamePreferences = {
   playerName: "玩家",
@@ -27,9 +29,16 @@ export function loadPreferences(): GamePreferences {
       typeof parsed.playerName === "string" &&
       typeof parsed.playerRingColor === "string"
     ) {
+      const playerName = parsed.playerName.normalize("NFKC").trim();
+      const playerNameLength = Array.from(playerName).length;
       return {
-        playerName: parsed.playerName.slice(0, 9).trim() || DEFAULT_PREFERENCES.playerName,
-        playerRingColor: parsed.playerRingColor,
+        playerName:
+          playerNameLength >= 2 && playerNameLength <= 10 && PLAYER_NAME_PATTERN.test(playerName)
+            ? playerName
+            : DEFAULT_PREFERENCES.playerName,
+        playerRingColor: PLAYER_COLOR_PATTERN.test(parsed.playerRingColor)
+          ? parsed.playerRingColor
+          : DEFAULT_PREFERENCES.playerRingColor,
         language: "language" in parsed && isLanguage(parsed.language) ? parsed.language : "zh-CN",
       };
     }

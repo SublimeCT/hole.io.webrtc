@@ -85,4 +85,41 @@ describe("RoomService", () => {
       error: "SIGNAL_NOT_ALLOWED",
     });
   });
+
+  it("updates a lobby profile and clears the player's ready state", async () => {
+    const service = new RoomService(new MemoryPersistence(), () => 1_000);
+    const host = "host" as PeerId;
+    const created = await service.createRoom(host, profile("Host"));
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    expect(service.setReady(host, true).ok).toBe(true);
+    const updatedProfile = { ...profile("New Host"), color: "#ABCDEF" };
+    const updated = service.updateProfile(host, updatedProfile);
+
+    expect(updated.ok).toBe(true);
+    expect(created.value.members.get(host)).toMatchObject({
+      profile: updatedProfile,
+      ready: false,
+    });
+  });
+
+  it("rejects profile updates after WebRTC connection setup starts", async () => {
+    const service = new RoomService(new MemoryPersistence(), () => 1_000);
+    const host = "host" as PeerId;
+    const guest = "guest" as PeerId;
+    const created = await service.createRoom(host, profile("Host"));
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    service.enterRoom(created.value.code, guest, profile("Guest"));
+    service.setReady(host, true);
+    service.setReady(guest, true);
+    await service.beginConnection(host);
+
+    expect(service.updateProfile(guest, profile("Changed"))).toEqual({
+      ok: false,
+      error: "INVALID_STATE",
+    });
+  });
 });

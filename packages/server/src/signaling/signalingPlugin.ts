@@ -27,6 +27,8 @@ const SOCKET_OPEN = 1;
 const RATE_WINDOW_MS = 1000;
 const MAX_CONNECTIONS = 100;
 const MAX_CONNECTIONS_PER_IP = 5;
+const MAX_PENDING_MESSAGES_PER_CONNECTION = 8;
+const MAX_SOCKET_BUFFERED_BYTES = 256 * 1024;
 
 interface PeerConnection {
   peerId: PeerId;
@@ -35,6 +37,7 @@ interface PeerConnection {
   messageCount: number;
   windowStartedAt: number;
   invalidMessages: number;
+  pendingMessages: number;
   queue: Promise<void>;
 }
 
@@ -86,10 +89,16 @@ const signalingPlugin: FastifyPluginAsync<SignalingOptions> = async (app, opts) 
   const connections = new Map<PeerId, PeerConnection>();
   const connectionCountByIp = new Map<string, number>();
   const allowedOrigins = resolveCorsOrigin(opts.config.CORS_ORIGIN);
+  const stunUris = resolveCsv(opts.config.STUN_URIS);
   const turnUris = resolveCsv(opts.config.TURN_URIS);
 
   const send = (socket: WebSocket, message: ServerToClientMessage): void => {
-    if (socket.readyState === SOCKET_OPEN) socket.send(JSON.stringify(message));
+    if (socket.readyState !== SOCKET_OPEN) return;
+    if (socket.bufferedAmount > MAX_SOCKET_BUFFERED_BYTES) {
+      socket.close(1013, "outbound buffer exceeded");
+      return;
+    }
+    socket.send(JSON.stringify(message));
   };
 
   const sendToPeer = (peerId: PeerId, message: ServerToClientMessage): void => {
@@ -148,6 +157,7 @@ const signalingPlugin: FastifyPluginAsync<SignalingOptions> = async (app, opts) 
       opts.config.TURN_SECRET,
       peerId,
       opts.config.TURN_TTL_SECONDS,
+      stunUris,
       turnUris,
       now(),
     );
@@ -242,6 +252,17 @@ const signalingPlugin: FastifyPluginAsync<SignalingOptions> = async (app, opts) 
       }
       case "set-ready": {
         const result = roomService.setReady(connection.peerId, message.ready);
+        if (!result.ok) sendError(connection, roomFailureCode(result.error));
+        else broadcastState(result.value);
+        return;
+      }
+      case "update-profile": {
+        const profile = normalizePlayerProfile(message.profile);
+        if (profile === null) {
+          sendError(connection, "INVALID_MESSAGE");
+          return;
+        }
+        const result = roomService.updateProfile(connection.peerId, profile);
         if (!result.ok) sendError(connection, roomFailureCode(result.error));
         else broadcastState(result.value);
         return;
@@ -347,6 +368,7 @@ const signalingPlugin: FastifyPluginAsync<SignalingOptions> = async (app, opts) 
         messageCount: 0,
         windowStartedAt: now(),
         invalidMessages: 0,
+        pendingMessages: 0,
         queue: Promise.resolve(),
       };
       connections.set(peerId, connection);
@@ -359,19 +381,23 @@ const signalingPlugin: FastifyPluginAsync<SignalingOptions> = async (app, opts) 
       });
 
       socket.on("message", (raw) => {
+        const currentTime = now();
+        if (currentTime - connection.windowStartedAt >= RATE_WINDOW_MS) {
+          connection.windowStartedAt = currentTime;
+          connection.messageCount = 0;
+        }
+        connection.messageCount += 1;
+        if (connection.messageCount > WS_MESSAGES_PER_SECOND) {
+          sendError(connection, "RATE_LIMITED");
+          return;
+        }
+        if (connection.pendingMessages >= MAX_PENDING_MESSAGES_PER_CONNECTION) {
+          socket.close(1013, "message queue exceeded");
+          return;
+        }
+        connection.pendingMessages += 1;
         connection.queue = connection.queue
           .then(async () => {
-            const currentTime = now();
-            if (currentTime - connection.windowStartedAt >= RATE_WINDOW_MS) {
-              connection.windowStartedAt = currentTime;
-              connection.messageCount = 0;
-            }
-            connection.messageCount += 1;
-            if (connection.messageCount > WS_MESSAGES_PER_SECOND) {
-              sendError(connection, "RATE_LIMITED");
-              return;
-            }
-
             let parsed: unknown;
             try {
               parsed = JSON.parse(raw.toString());
@@ -391,6 +417,9 @@ const signalingPlugin: FastifyPluginAsync<SignalingOptions> = async (app, opts) 
           .catch((error: unknown) => {
             app.log.error({ err: error, peerId }, "websocket dispatch failed");
             sendError(connection, "INTERNAL_ERROR");
+          })
+          .finally(() => {
+            connection.pendingMessages -= 1;
           });
       });
 

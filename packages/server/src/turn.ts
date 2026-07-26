@@ -7,6 +7,7 @@ export function generateTurnCredentials(
   secret: string,
   peerId: string,
   ttlSeconds: number,
+  stunUris: readonly string[],
   uris: readonly string[],
   now: number,
 ): TurnCredentials {
@@ -14,6 +15,12 @@ export function generateTurnCredentials(
   if (!PEER_ID_PATTERN.test(peerId)) throw new Error("invalid TURN peer id");
   if (!Number.isInteger(ttlSeconds) || ttlSeconds < 60 || ttlSeconds > 86_400) {
     throw new Error("TURN TTL must be an integer between 60 and 86400 seconds");
+  }
+  if (
+    stunUris.length === 0 ||
+    stunUris.some((uri) => !uri.startsWith("stun:") || uri.length > 2048)
+  ) {
+    throw new Error("STUN URIs must be non-empty stun: URIs");
   }
   if (
     uris.length === 0 ||
@@ -26,5 +33,11 @@ export function generateTurnCredentials(
   const expiry = Math.floor(now / 1000) + ttlSeconds;
   const username = `${expiry}:${peerId}`;
   const credential = createHmac("sha1", secret).update(username).digest("base64");
-  return { username, credential, ttl: ttlSeconds, uris };
+  return {
+    username,
+    credential,
+    ttl: ttlSeconds,
+    stunUris: [...stunUris],
+    uris: [...uris],
+  };
 }

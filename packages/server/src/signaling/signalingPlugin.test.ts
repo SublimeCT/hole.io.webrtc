@@ -16,6 +16,7 @@ const config: Config = {
   TURN_SECRET: "test-turn-secret-that-is-at-least-32-chars",
   TURN_TTL_SECONDS: 3600,
   TURN_REALM: "hole.io",
+  STUN_URIS: "stun:localhost:3478",
   TURN_URIS: "turn:localhost:3478?transport=udp",
 };
 
