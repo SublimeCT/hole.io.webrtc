@@ -14,12 +14,24 @@ import {
   createInitialSimulation,
   getHoleProgress,
   stepSimulation,
-  type HoleState,
   type AbilityId,
+  type HoleState,
+  type PlayerInput,
+  type PowerUpType,
   type SimulationEvent,
   type SimulationState,
-  type PowerUpType,
+  type Vector2,
 } from "@hole-io/shared/simulation";
+import {
+  applyCheckpointToState,
+  applyDeltaToState,
+  buildFullCheckpoint,
+  simulationEventToWorldEvent,
+  stateToDeltaSnapshot,
+  type FullStateCheckpoint,
+  type StateDeltaSnapshot,
+  type WorldEvent,
+} from "@hole-io/shared/protocol";
 import * as THREE from "three";
 
 import type { MatchResult } from "../app/matchResult";
@@ -32,6 +44,43 @@ import { InputController } from "./InputController";
 import { PowerUpRenderer } from "./PowerUpRenderer";
 
 const FIXED_STEP_SECONDS = 1 / 60;
+/** host 广播增量快照的目标频率（30Hz），#frame 内累加时间触发。 */
+const SNAPSHOT_INTERVAL_SECONDS = 1 / 30;
+/** guest 模式把本地输入上报给 host 的目标频率（~30Hz）。 */
+const INPUT_SEND_INTERVAL_SECONDS = 1 / 30;
+
+export type GameMode = "offline" | "host" | "guest";
+
+interface RemoteInput {
+  direction: Vector2;
+  /** 尚未被权威循环消费的技能意图；host step 后清空。 */
+  pendingAbilities: AbilityId[];
+  seq: number;
+}
+
+export interface GameConfig {
+  canvas: HTMLCanvasElement;
+  ui: GameUi;
+  preferences: GamePreferences;
+  initialState: SimulationState;
+  /** 本地玩家的 hole id：单机为 "player"，联机为本地 peerId。 */
+  localPlayerId: string;
+  mode: GameMode;
+  /** hole id → 显示名（排名行、结算）。 */
+  playerNames: ReadonlyMap<string, string>;
+  /** hole id → 圆环颜色 #RRGGBB。 */
+  playerColors: ReadonlyMap<string, THREE.ColorRepresentation>;
+  /** 联机对局 id；offline 为 null。 */
+  matchId: string | null;
+  onMatchEnd: (result: MatchResult) => void;
+  onPoopHit: (playerCount: number) => void;
+  /** host 模式：每 ~100ms 产出一条要广播的 unreliable 增量快照。 */
+  onBroadcastSnapshot?: ((delta: StateDeltaSnapshot) => void) | undefined;
+  /** host 模式：每步产出已转换的可靠 WorldEvent（driver 直接 reliable 广播）。 */
+  onWorldEvents?: ((events: readonly WorldEvent[]) => void) | undefined;
+  /** guest 模式：~30Hz 把本地归一化输入 + 技能意图上报给 host。 */
+  onSendLocalInput?: ((direction: Vector2, abilities: readonly AbilityId[]) => void) | undefined;
+}
 
 export interface GameUi {
   score: HTMLElement;
@@ -41,14 +90,14 @@ export interface GameUi {
   growthFill: HTMLElement;
   time: HTMLElement;
   timerRoot: HTMLElement;
-  rankingRows: readonly [RankingRowUi, RankingRowUi, RankingRowUi];
+  rankingRows: readonly RankingRowUi[];
   dragPad: HTMLElement;
   dragKnob: HTMLElement;
   loading: HTMLElement;
   loadingBar: HTMLElement;
   loadingStatus: HTMLElement;
   scoreEffects: HTMLElement;
-  opponentIndicators: readonly [OpponentIndicatorUi, OpponentIndicatorUi];
+  opponentIndicators: readonly OpponentIndicatorUi[];
   abilityButtons: readonly [AbilityButtonUi, AbilityButtonUi, AbilityButtonUi];
   abilityFeedback: HTMLElement;
   powerUpLayer: HTMLElement;
@@ -73,6 +122,7 @@ export interface OpponentIndicatorUi {
   root: HTMLElement;
   arrow: HTMLElement;
   distance: HTMLElement;
+  name?: HTMLElement;
 }
 
 export class Game {
@@ -98,6 +148,27 @@ export class Game {
   readonly #cameraRight = new THREE.Vector3();
   readonly #worldUp = new THREE.Vector3(0, 1, 0);
   #state: SimulationState;
+  readonly #mode: GameMode;
+  readonly #localPlayerId: string;
+  readonly #playerNames: ReadonlyMap<string, string>;
+  readonly #matchId: string | null;
+  readonly #onBroadcastSnapshot: ((delta: StateDeltaSnapshot) => void) | undefined;
+  readonly #onWorldEvents: ((events: readonly WorldEvent[]) => void) | undefined;
+  readonly #onSendLocalInput:
+    | ((direction: Vector2, abilities: readonly AbilityId[]) => void)
+    | undefined;
+  // host 权威广播状态
+  #snapshotSeq = 0;
+  #hostTick = 0;
+  #worldRevision = 0;
+  #baseWorldRevision = 0;
+  #snapshotAccumulator = 0;
+  readonly #emittedConsumed = new Set<string>();
+  readonly #remoteInputs = new Map<string, RemoteInput>();
+  readonly #lastProcessedInputByPeer = new Map<string, number>();
+  readonly #initialState: SimulationState;
+  // guest 输入上报状态
+  #inputSendAccumulator = 0;
   #lastTime = 0;
   #accumulator = 0;
   #hudAccumulator = 0;
@@ -113,20 +184,22 @@ export class Game {
   #lastBombFuseRemaining = 0;
   #playerSwallowCount = 0;
 
-  private constructor(
-    canvas: HTMLCanvasElement,
-    ui: GameUi,
-    preferences: GamePreferences,
-    initialState: SimulationState,
-    onMatchEnd: (result: MatchResult) => void,
-    onPoopHit: (playerCount: number) => void,
-  ) {
+  private constructor(config: GameConfig) {
+    const { canvas, ui, preferences } = config;
     this.#canvas = canvas;
     this.#ui = ui;
     this.#preferences = preferences;
-    this.#onMatchEnd = onMatchEnd;
-    this.#onPoopHit = onPoopHit;
-    this.#state = initialState;
+    this.#onMatchEnd = config.onMatchEnd;
+    this.#onPoopHit = config.onPoopHit;
+    this.#state = config.initialState;
+    this.#initialState = config.initialState;
+    this.#mode = config.mode;
+    this.#localPlayerId = config.localPlayerId;
+    this.#playerNames = config.playerNames;
+    this.#matchId = config.matchId;
+    this.#onBroadcastSnapshot = config.onBroadcastSnapshot;
+    this.#onWorldEvents = config.onWorldEvents;
+    this.#onSendLocalInput = config.onSendLocalInput;
     this.#mobileGraphics = window.matchMedia("(pointer: coarse)").matches;
     this.#renderer = new THREE.WebGLRenderer({
       canvas,
@@ -141,10 +214,13 @@ export class Game {
     this.#renderer.autoClear = false;
     this.#input = new InputController(canvas, ui.dragPad, ui.dragKnob);
     this.#cityObjects = new CityObjectRenderer(this.#scene);
-    this.#holeRenderer = new HoleRenderer(this.#scene, preferences);
+    this.#holeRenderer = new HoleRenderer(this.#scene, {
+      colors: config.playerColors,
+      localPlayerId: config.localPlayerId,
+    });
     this.#powerUpRenderer = new PowerUpRenderer(this.#scene, ui.powerUpLayer);
     this.#buildScene();
-    this.#holeRenderer.build(initialState.holes);
+    this.#holeRenderer.build(config.initialState.holes);
     this.#resize();
     this.#syncScene(1);
     this.#updateHud();
@@ -165,19 +241,43 @@ export class Game {
   ): Promise<Game> {
     const mapSeed = 0x5eed1234;
     const spawnSeed = (crypto.getRandomValues(new Uint32Array(1))[0] ?? Date.now()) >>> 0;
-    const game = new Game(
+    const playerNames = new Map<string, string>([
+      ["player", preferences.playerName],
+      ["bot-1", "BOT 01"],
+      ["bot-2", "BOT 02"],
+    ]);
+    const playerColors = new Map<string, THREE.ColorRepresentation>([
+      ["player", preferences.playerRingColor],
+      ["bot-1", "#ff8a3d"],
+      ["bot-2", "#5aa9e6"],
+    ]);
+    return Game.#instantiate({
       canvas,
       ui,
       preferences,
-      createInitialSimulation(mapSeed, spawnSeed),
+      initialState: createInitialSimulation(mapSeed, spawnSeed),
+      localPlayerId: "player",
+      mode: "offline",
+      playerNames,
+      playerColors,
+      matchId: null,
       onMatchEnd,
       onPoopHit,
-    );
+    });
+  }
+
+  /** 联机工厂：driver 在收到 match-start 并建好初始 state 后调用（mode 为 host/guest）。 */
+  static async createOnline(config: GameConfig): Promise<Game> {
+    return Game.#instantiate(config);
+  }
+
+  static async #instantiate(config: GameConfig): Promise<Game> {
+    const game = new Game(config);
     try {
       await game.#cityObjects.initialize(game.#state.objects, (loaded, total) => {
         const progress = total === 0 ? 1 : loaded / total;
-        ui.loadingBar.style.transform = `scaleX(${progress})`;
-        ui.loadingStatus.textContent = `${loaded.toString().padStart(2, "0")} / ${total
+        config.ui.loadingBar.style.transform = `scaleX(${progress})`;
+        config.ui.loadingStatus.textContent = `${loaded.toString().padStart(2, "0")} / ${total
           .toString()
           .padStart(2, "0")}`;
       });
@@ -185,7 +285,7 @@ export class Game {
       game.dispose();
       throw error;
     }
-    ui.loading.hidden = true;
+    config.ui.loading.hidden = true;
     game.#cityObjects.sync(game.#state.objects);
     return game;
   }
@@ -228,25 +328,31 @@ export class Game {
     this.#accumulator += frameSeconds;
     this.#hudAccumulator += frameSeconds;
 
-    while (this.#matchStarted && this.#accumulator >= FIXED_STEP_SECONDS) {
-      const result = stepSimulation(
-        this.#state,
-        [
-          {
-            playerId: "player",
-            direction: this.#input.getDirection(),
-            abilities: [...this.#pendingAbilities],
-          },
-        ],
-        FIXED_STEP_SECONDS,
-      );
-      this.#pendingAbilities.clear();
-      this.#state = result.state;
-      result.events.forEach((event) => this.#handleEvent(event));
-      this.#accumulator -= FIXED_STEP_SECONDS;
-    }
-    if (!this.#matchStarted) {
+    if (this.#mode === "guest") {
+      // guest：不推进权威模拟（位置/分数由 host 快照决定），只按节拍上报本地输入。
       this.#accumulator = 0;
+      if (this.#matchStarted) {
+        this.#inputSendAccumulator += frameSeconds;
+        if (this.#inputSendAccumulator >= INPUT_SEND_INTERVAL_SECONDS) {
+          this.#inputSendAccumulator = 0;
+          this.#emitLocalInput();
+        }
+      }
+    } else {
+      while (this.#matchStarted && this.#accumulator >= FIXED_STEP_SECONDS) {
+        this.#stepAuthoritative();
+        this.#accumulator -= FIXED_STEP_SECONDS;
+      }
+      if (!this.#matchStarted) {
+        this.#accumulator = 0;
+      }
+      if (this.#mode === "host" && this.#matchStarted) {
+        this.#snapshotAccumulator += frameSeconds;
+        if (this.#snapshotAccumulator >= SNAPSHOT_INTERVAL_SECONDS) {
+          this.#snapshotAccumulator = 0;
+          this.#broadcastSnapshot();
+        }
+      }
     }
 
     if (this.#hudAccumulator >= 0.08 || this.#state.status === "finished") {
@@ -265,6 +371,126 @@ export class Game {
       this.#onMatchEnd(this.#createMatchResult());
     }
   };
+
+  /** offline/host：固定步长推进一步权威模拟，并消费本地 + 远端输入。 */
+  #stepAuthoritative(): void {
+    const inputs: PlayerInput[] = [
+      {
+        playerId: this.#localPlayerId,
+        direction: this.#input.getDirection(),
+        abilities: [...this.#pendingAbilities],
+      },
+    ];
+    this.#pendingAbilities.clear();
+    for (const [peerId, remote] of this.#remoteInputs) {
+      this.#lastProcessedInputByPeer.set(peerId, remote.seq);
+      inputs.push({
+        playerId: peerId,
+        direction: remote.direction,
+        abilities: remote.pendingAbilities,
+      });
+      remote.pendingAbilities = [];
+    }
+    const result = stepSimulation(this.#state, inputs, FIXED_STEP_SECONDS);
+    this.#state = result.state;
+    this.#hostTick += 1;
+    result.events.forEach((event) => this.#handleEvent(event));
+    if (this.#mode === "host" && result.events.length > 0) {
+      // 可观察世界的离散变化递增 worldRevision（吞噬/阵亡/道具），供 guest 重同步判定。
+      this.#worldRevision += result.events.length;
+      const worldEvents: WorldEvent[] = [];
+      for (const event of result.events) {
+        const worldEvent = simulationEventToWorldEvent(event, {
+          matchId: this.#matchId ?? "",
+          worldRevision: this.#worldRevision,
+          powerUps: this.#state.powerUps,
+        });
+        if (worldEvent !== null) worldEvents.push(worldEvent);
+      }
+      if (worldEvents.length > 0) this.#onWorldEvents?.(worldEvents);
+    }
+  }
+
+  /** guest：把本地归一化输入 + 技能意图上报给 host（driver 包装成 InputPacket）。 */
+  #emitLocalInput(): void {
+    if (this.#onSendLocalInput === undefined) return;
+    const abilities = [...this.#pendingAbilities];
+    this.#pendingAbilities.clear();
+    this.#onSendLocalInput(this.#input.getDirection(), abilities);
+  }
+
+  /** host：把当前权威状态编码成增量快照，~10Hz 广播给所有 guest。 */
+  #broadcastSnapshot(): void {
+    if (this.#onBroadcastSnapshot === undefined || this.#matchId === null) return;
+    const delta = stateToDeltaSnapshot({
+      state: this.#state,
+      matchId: this.#matchId,
+      snapshotSeq: this.#snapshotSeq,
+      hostTick: this.#hostTick,
+      hostTime: performance.now(),
+      baseWorldRevision: this.#baseWorldRevision,
+      worldRevision: this.#worldRevision,
+      lastProcessedInputByPeer: this.#lastProcessedInputByPeer,
+      emittedConsumed: this.#emittedConsumed,
+    });
+    this.#snapshotSeq += 1;
+    this.#baseWorldRevision = this.#worldRevision;
+    this.#onBroadcastSnapshot(delta);
+  }
+
+  /** host：driver 收到 guest InputPacket 时缓存，供下一帧权威步消费。 */
+  setRemoteInput(
+    peerId: string,
+    direction: Vector2,
+    abilities: readonly AbilityId[],
+    seq: number,
+  ): void {
+    const existing = this.#remoteInputs.get(peerId);
+    if (existing === undefined) {
+      this.#remoteInputs.set(peerId, { direction, pendingAbilities: [...abilities], seq });
+      return;
+    }
+    existing.direction = direction;
+    existing.seq = seq;
+    for (const ability of abilities) {
+      if (!existing.pendingAbilities.includes(ability)) {
+        existing.pendingAbilities.push(ability);
+      }
+    }
+  }
+
+  /** guest：driver 收到 unreliable 增量快照时合并进渲染 state。 */
+  applyDelta(delta: StateDeltaSnapshot): void {
+    this.#state = applyDeltaToState(this.#state, delta);
+    this.#worldRevision = delta.worldRevision;
+    this.#sceneDirty = true;
+  }
+
+  /** guest：driver 收到可靠 checkpoint 后，从初始基线重建世界。 */
+  applyCheckpoint(checkpoint: FullStateCheckpoint): void {
+    this.#state = applyCheckpointToState(this.#initialState, checkpoint);
+    this.#worldRevision = checkpoint.worldRevision;
+    this.#sceneDirty = true;
+  }
+
+  /** guest 本地 worldRevision，driver 据此与 delta.baseWorldRevision 比对决定是否 resync。 */
+  get localWorldRevision(): number {
+    return this.#worldRevision;
+  }
+
+  /** host：driver 收到 guest resync-request 时，编码当前权威世界为可靠 checkpoint。 */
+  buildCheckpoint(checkpointId: string): FullStateCheckpoint | null {
+    if (this.#matchId === null) return null;
+    return buildFullCheckpoint({
+      state: this.#state,
+      matchId: this.#matchId,
+      checkpointId,
+      snapshotSeq: this.#snapshotSeq,
+      hostTick: this.#hostTick,
+      worldRevision: this.#worldRevision,
+      hostTime: performance.now(),
+    });
+  }
 
   #buildScene(): void {
     this.#scene.background = new THREE.Color(0x91b5bf);
@@ -414,7 +640,7 @@ export class Game {
       })[0];
     this.#holeRenderer.sync(this.#state.holes, this.#state.elapsed, deltaSeconds, leader?.id);
 
-    const player = this.#state.holes.find((hole) => hole.id === "player");
+    const player = this.#state.holes.find((hole) => hole.id === this.#localPlayerId);
     if (!player) {
       this.#cityObjects.sync(this.#state.objects, deltaSeconds);
       return;
@@ -456,7 +682,9 @@ export class Game {
   }
 
   #updateOpponentIndicators(player: HoleState): void {
-    const bots = this.#state.holes.filter((hole) => hole.kind === "bot");
+    const opponents = this.#state.holes.filter(
+      (hole) => hole.id !== this.#localPlayerId && hole.kind === "human",
+    );
     const width = this.#canvas.clientWidth;
     const height = this.#canvas.clientHeight;
     const centerX = width / 2;
@@ -470,16 +698,20 @@ export class Game {
     this.#cameraRight.crossVectors(this.#cameraForward, this.#worldUp).normalize();
 
     this.#ui.opponentIndicators.forEach((indicator, index) => {
-      const bot = bots[index];
-      if (!bot || bot.eliminationRemaining > 0 || bot.isOut) {
+      const opponent = opponents[index];
+      if (!opponent || opponent.eliminationRemaining > 0 || opponent.isOut) {
         indicator.root.hidden = true;
         return;
       }
       indicator.root.hidden = false;
+      if (indicator.name) {
+        const displayName = this.#playerNames.get(opponent.id) ?? opponent.id;
+        indicator.name.textContent = displayName.toUpperCase();
+      }
       this.#opponentDelta.set(
-        bot.position.x - player.position.x,
+        opponent.position.x - player.position.x,
         0,
-        bot.position.y - player.position.y,
+        opponent.position.y - player.position.y,
       );
       let directionX = this.#opponentDelta.dot(this.#cameraRight);
       let directionY = -this.#opponentDelta.dot(this.#cameraForward);
@@ -501,13 +733,16 @@ export class Game {
       indicator.root.style.transform = `translate3d(${x}px, ${y}px, 0) translate(-50%, -50%)`;
       indicator.arrow.style.transform = `rotate(${angle}rad)`;
       indicator.distance.textContent = `${Math.round(
-        Math.hypot(bot.position.x - player.position.x, bot.position.y - player.position.y),
+        Math.hypot(
+          opponent.position.x - player.position.x,
+          opponent.position.y - player.position.y,
+        ),
       )}m`;
     });
   }
 
   #updateHud(): void {
-    const player = this.#state.holes.find((hole) => hole.id === "player");
+    const player = this.#state.holes.find((hole) => hole.id === this.#localPlayerId);
     if (!player) {
       return;
     }
@@ -593,20 +828,21 @@ export class Game {
     });
   }
 
-  #writeRankingRows(
-    rows: readonly [RankingRowUi, RankingRowUi, RankingRowUi],
-    rankableHoles: readonly HoleState[],
-  ): void {
+  #writeRankingRows(rows: readonly RankingRowUi[], rankableHoles: readonly HoleState[]): void {
+    const activeHoleCount = rankableHoles.length;
     rows.forEach((row, index) => {
-      const hole = rankableHoles[index];
-      if (!hole) {
+      if (index >= activeHoleCount) {
+        row.root.hidden = true;
         return;
       }
+      const hole = rankableHoles[index];
+      if (!hole) {
+        row.root.hidden = true;
+        return;
+      }
+      row.root.hidden = false;
       row.position.textContent = (index + 1).toString();
-      const displayName =
-        hole.kind === "human"
-          ? this.#preferences.playerName
-          : `BOT ${hole.id.slice(4).padStart(2, "0")}`;
+      const displayName = this.#playerNames.get(hole.id) ?? hole.id;
       const holeProgress = getHoleProgress(hole.score);
       row.avatar.textContent = displayName.charAt(0).toUpperCase() || "·";
       row.name.textContent = displayName.toUpperCase();
@@ -614,7 +850,7 @@ export class Game {
         ? `Lv.${holeProgress.level + 1} · ${translate(this.#preferences.language, "out")}`
         : `Lv.${holeProgress.level + 1} · R${hole.radius.toFixed(1)}`;
       row.score.textContent = hole.score.toString();
-      row.root.classList.toggle("is-player", hole.kind === "human");
+      row.root.classList.toggle("is-player", hole.id === this.#localPlayerId);
       row.root.classList.toggle("is-bot-one", hole.id === "bot-1");
       row.root.classList.toggle("is-bot-two", hole.id === "bot-2");
       row.root.classList.toggle("is-eliminated", hole.eliminationRemaining > 0 || hole.isOut);
@@ -626,11 +862,11 @@ export class Game {
 
   #handleEvent(event: SimulationEvent): void {
     if (event.type === "poop-hit") {
-      if (event.holeId === "player") this.#onPoopHit(this.#state.holes.length);
+      if (event.holeId === this.#localPlayerId) this.#onPoopHit(this.#state.holes.length);
       return;
     }
     if (event.type === "power-up-collected") {
-      if (event.holeId === "player") {
+      if (event.holeId === this.#localPlayerId) {
         const emoji: Record<PowerUpType, string> = {
           magnet: "🧲",
           shrink: "🔍",
@@ -650,7 +886,7 @@ export class Game {
       }
       return;
     }
-    if (event.holeId !== "player") {
+    if (event.holeId !== this.#localPlayerId) {
       return;
     }
     this.#playerSwallowCount += 1;
@@ -675,16 +911,13 @@ export class Game {
       })
       .map((hole) => ({
         id: hole.id,
-        name:
-          hole.kind === "human"
-            ? this.#preferences.playerName.toUpperCase()
-            : `BOT ${hole.id.slice(4).padStart(2, "0")}`,
+        name: (this.#playerNames.get(hole.id) ?? hole.id).toUpperCase(),
         score: hole.score,
-        isPlayer: hole.kind === "human",
+        isPlayer: hole.id === this.#localPlayerId,
         isOut: hole.isOut,
       }));
     const playerIndex = ranking.findIndex((entry) => entry.isPlayer);
-    const playerHole = this.#state.holes.find((hole) => hole.id === "player");
+    const playerHole = this.#state.holes.find((hole) => hole.id === this.#localPlayerId);
     return {
       playerRank: Math.max(1, playerIndex + 1),
       playerScore: ranking[playerIndex]?.score ?? 0,
@@ -718,7 +951,7 @@ export class Game {
 
   #requestAbility(ability: AbilityId): void {
     if (!this.#matchStarted) return;
-    const player = this.#state.holes.find((hole) => hole.id === "player");
+    const player = this.#state.holes.find((hole) => hole.id === this.#localPlayerId);
     if (!player || player.eliminationRemaining > 0 || player.isOut) return;
     const active =
       ability === "speed"

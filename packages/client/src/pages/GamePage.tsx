@@ -1,10 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useStore } from "zustand";
 
-import { saveMatchResult } from "../app/matchResult";
+import { saveMatchResult, type MatchResult } from "../app/matchResult";
 import { loadPreferences } from "../app/preferences";
 import { translate } from "../app/i18n";
-import { Game, type AbilityButtonUi, type GameUi } from "../game/Game";
+import { Game, type AbilityButtonUi, type GameUi, type OpponentIndicatorUi } from "../game/Game";
+import { useMultiplayer } from "../net/MultiplayerProvider";
+import { OnlineGameDriver } from "../net/onlineGameDriver";
+import { multiplayerStore } from "../store/multiplayerStore";
 import { VoidWordmark } from "../ui/VoidWordmark";
 
 function requireElement<T extends Element>(selector: string): T {
@@ -14,6 +18,21 @@ function requireElement<T extends Element>(selector: string): T {
 }
 
 function collectGameUi(): GameUi {
+  const opponentIndicators: OpponentIndicatorUi[] = [];
+  for (let i = 0; i < 4; i++) {
+    const root = document.querySelector<HTMLElement>(`#opponent-${i}-indicator`);
+    const arrow = document.querySelector<HTMLElement>(`#opponent-${i}-arrow`);
+    const distance = document.querySelector<HTMLElement>(`#opponent-${i}-distance`);
+    const name = document.querySelector<HTMLElement>(`#opponent-${i}-name`);
+    if (root && arrow && distance) {
+      if (name) {
+        opponentIndicators.push({ root, arrow, distance, name });
+      } else {
+        opponentIndicators.push({ root, arrow, distance });
+      }
+    }
+  }
+
   return {
     score: requireElement("#score"),
     radius: requireElement("#radius"),
@@ -22,50 +41,21 @@ function collectGameUi(): GameUi {
     growthFill: requireElement("#growth-fill"),
     time: requireElement("#time"),
     timerRoot: requireElement("#timer-root"),
-    rankingRows: [
-      {
-        root: requireElement("#rank-first"),
-        position: requireElement("#rank-first-position"),
-        avatar: requireElement("#rank-first-avatar"),
-        name: requireElement("#rank-first-name"),
-        meta: requireElement("#rank-first-meta"),
-        score: requireElement("#rank-first-score"),
-      },
-      {
-        root: requireElement("#rank-second"),
-        position: requireElement("#rank-second-position"),
-        avatar: requireElement("#rank-second-avatar"),
-        name: requireElement("#rank-second-name"),
-        meta: requireElement("#rank-second-meta"),
-        score: requireElement("#rank-second-score"),
-      },
-      {
-        root: requireElement("#rank-third"),
-        position: requireElement("#rank-third-position"),
-        avatar: requireElement("#rank-third-avatar"),
-        name: requireElement("#rank-third-name"),
-        meta: requireElement("#rank-third-meta"),
-        score: requireElement("#rank-third-score"),
-      },
-    ],
+    rankingRows: Array.from({ length: 5 }, (_, index) => ({
+      root: requireElement(`#rank-${index}`),
+      position: requireElement(`#rank-${index}-position`),
+      avatar: requireElement(`#rank-${index}-avatar`),
+      name: requireElement(`#rank-${index}-name`),
+      meta: requireElement(`#rank-${index}-meta`),
+      score: requireElement(`#rank-${index}-score`),
+    })),
     dragPad: requireElement("#drag-pad"),
     dragKnob: requireElement("#drag-knob"),
     loading: requireElement("#loading"),
     loadingBar: requireElement("#loading-bar"),
     loadingStatus: requireElement("#loading-status"),
     scoreEffects: requireElement("#score-effects"),
-    opponentIndicators: [
-      {
-        root: requireElement("#bot-one-indicator"),
-        arrow: requireElement("#bot-one-arrow"),
-        distance: requireElement("#bot-one-distance"),
-      },
-      {
-        root: requireElement("#bot-two-indicator"),
-        arrow: requireElement("#bot-two-arrow"),
-        distance: requireElement("#bot-two-distance"),
-      },
-    ],
+    opponentIndicators,
     abilityButtons: [
       {
         root: requireElement<HTMLButtonElement>("#ability-speed"),
@@ -96,52 +86,73 @@ export default function GamePage() {
   const [poopRain, setPoopRain] = useState<
     readonly { id: number; size: number; left: number; delay: number }[]
   >([]);
+  const { session } = useMultiplayer();
+  const matchId = useStore(multiplayerStore, (state) => state.matchId);
+  const roomStatus = useStore(multiplayerStore, (state) => state.room?.status ?? null);
+  const isOnline = session !== null && matchId !== null && roomStatus === "playing";
 
   useEffect(() => {
     const gameCanvas = canvas.current;
     if (!gameCanvas) return;
     let disposed = false;
-    let game: Game | null = null;
+    let activeCleanup: (() => void) | null = null;
 
-    void Game.create(
-      gameCanvas,
-      collectGameUi(),
-      preferences,
-      (result) => {
-        saveMatchResult(result);
-        navigate("/results", { replace: true });
-      },
-      (playerCount) => {
-        setPoopRain(
-          Array.from({ length: playerCount * 10 }, (_, id) => ({
-            id,
-            size: 60 + Math.random() * 120,
-            left: Math.random() * 100,
-            delay: Math.random() * 0.9,
-          })),
-        );
-        window.setTimeout(() => setPoopRain([]), 3_000);
-      },
-    )
-      .then((createdGame) => {
-        if (disposed) {
-          createdGame.dispose();
-          return;
-        }
-        game = createdGame;
-        game.start();
-      })
-      .catch((error: unknown) => {
+    const handleMatchEnd = (result: MatchResult): void => {
+      saveMatchResult(result);
+      navigate("/results", { replace: true });
+    };
+    const handlePoopHit = (playerCount: number): void => {
+      setPoopRain(
+        Array.from({ length: playerCount * 10 }, (_, id) => ({
+          id,
+          size: 60 + Math.random() * 120,
+          left: Math.random() * 100,
+          delay: Math.random() * 0.9,
+        })),
+      );
+      window.setTimeout(() => setPoopRain([]), 3_000);
+    };
+
+    if (isOnline) {
+      if (session === null) return;
+      const driver = new OnlineGameDriver({
+        session,
+        canvas: gameCanvas,
+        ui: collectGameUi(),
+        preferences,
+        onMatchEnd: handleMatchEnd,
+        onPoopHit: handlePoopHit,
+      });
+      driver.start().catch((error: unknown) => {
         const status = document.querySelector<HTMLElement>("#loading-status");
         if (status) status.textContent = translate(language, "loadError");
         console.error(error);
       });
+      activeCleanup = () => driver.dispose();
+    } else {
+      let game: Game | null = null;
+      Game.create(gameCanvas, collectGameUi(), preferences, handleMatchEnd, handlePoopHit)
+        .then((createdGame) => {
+          if (disposed) {
+            createdGame.dispose();
+            return;
+          }
+          game = createdGame;
+          game.start();
+        })
+        .catch((error: unknown) => {
+          const status = document.querySelector<HTMLElement>("#loading-status");
+          if (status) status.textContent = translate(language, "loadError");
+          console.error(error);
+        });
+      activeCleanup = () => {
+        disposed = true;
+        game?.dispose();
+      };
+    }
 
-    return () => {
-      disposed = true;
-      game?.dispose();
-    };
-  }, [language, navigate]);
+    return () => activeCleanup?.();
+  }, [isOnline, session, language, navigate]);
 
   return (
     <main className="app-shell">
@@ -197,15 +208,16 @@ export default function GamePage() {
             <span>{translate(language, "rankingLive")}</span>
             <span>{translate(language, "players", { count: 3 })}</span>
           </div>
-          <RankRow id="first" points={translate(language, "points")} />
-          <RankRow id="second" points={translate(language, "points")} />
-          <RankRow id="third" points={translate(language, "points")} />
+          {[0, 1, 2, 3, 4].map((index) => (
+            <RankRow key={index} index={index} points={translate(language, "points")} />
+          ))}
         </section>
       </header>
 
       <div className="hud-arrows" aria-hidden="true">
-        <OpponentIndicator id="bot-one" name="BOT 01" />
-        <OpponentIndicator id="bot-two" name="BOT 02" />
+        {[0, 1, 2, 3].map((index) => (
+          <OpponentIndicator key={index} index={index} />
+        ))}
       </div>
 
       <div className="hud-controls">
@@ -275,21 +287,21 @@ export default function GamePage() {
   );
 }
 
-function RankRow({ id, points }: { id: "first" | "second" | "third"; points: string }) {
+function RankRow({ index, points }: { index: number; points: string }) {
   return (
-    <div id={`rank-${id}`} className="rank-row">
-      <span id={`rank-${id}-position`} className="rank-row-position">
-        0{id === "first" ? 1 : id === "second" ? 2 : 3}
+    <div id={`rank-${index}`} className="rank-row">
+      <span id={`rank-${index}-position`} className="rank-row-position">
+        0{index + 1}
       </span>
-      <span id={`rank-${id}-avatar`} className="rank-row-avatar" />
+      <span id={`rank-${index}-avatar`} className="rank-row-avatar" />
       <span className="rank-row-name">
-        <b id={`rank-${id}-name`}>YOU</b>
-        <small id={`rank-${id}-meta`} className="rank-row-meta">
+        <b id={`rank-${index}-name`}>YOU</b>
+        <small id={`rank-${index}-meta`} className="rank-row-meta">
           Lv.1 · R1.1
         </small>
       </span>
       <span className="rank-row-score">
-        <em id={`rank-${id}-score`}>0</em>
+        <em id={`rank-${index}-score`}>0</em>
         <small>{points}</small>
       </span>
     </div>
@@ -326,9 +338,9 @@ function SkillButton({
   );
 }
 
-function OpponentIndicator({ id, name }: { id: "bot-one" | "bot-two"; name: string }) {
+function OpponentIndicator({ index }: { index: number }) {
   return (
-    <div id={`${id}-indicator`} className={`direction-marker ${id}-indicator`}>
+    <div id={`opponent-${index}-indicator`} className="direction-marker" hidden>
       <div className="direction-tag">
         <span className="direction-tag-icon" aria-hidden="true">
           <svg viewBox="0 0 24 24">
@@ -340,11 +352,13 @@ function OpponentIndicator({ id, name }: { id: "bot-one" | "bot-two"; name: stri
             <path d="M9.5 16h5" />
           </svg>
         </span>
-        <span className="direction-tag-name">{name}</span>
-        <span className="direction-tag-distance" id={`${id}-distance`}>
+        <span className="direction-tag-name" id={`opponent-${index}-name`}>
+          PLAYER
+        </span>
+        <span className="direction-tag-distance" id={`opponent-${index}-distance`}>
           0m
         </span>
-        <span className="direction-tag-arrow" id={`${id}-arrow`} aria-hidden="true">
+        <span className="direction-tag-arrow" id={`opponent-${index}-arrow`} aria-hidden="true">
           <svg viewBox="0 0 24 24">
             <path d="M9 4l9 8-9 8" />
           </svg>

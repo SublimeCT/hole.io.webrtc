@@ -5,6 +5,8 @@ export type AccessDecision =
   | { allowed: true }
   | { allowed: false; permanent: boolean; retryAt: number | null };
 
+const WHITELISTED_IPS = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
+
 export class AccessService {
   private readonly persistence: Persistence;
   private readonly now: () => number;
@@ -15,7 +17,12 @@ export class AccessService {
     this.now = now;
   }
 
+  private isWhitelisted(ip: string): boolean {
+    return WHITELISTED_IPS.has(ip);
+  }
+
   async check(ip: string): Promise<AccessDecision> {
+    if (this.isWhitelisted(ip)) return { allowed: true };
     const state = await this.persistence.getIpAccess(ip);
     if (state === null) return { allowed: true };
     if (state.permanentlyBlocked) {
@@ -28,6 +35,7 @@ export class AccessService {
   }
 
   async recordMissingRoom(ip: string): Promise<AccessDecision> {
+    if (this.isWhitelisted(ip)) return { allowed: true };
     return this.exclusive(ip, async () => {
       const now = this.now();
       const existing = await this.persistence.getIpAccess(ip);
@@ -65,6 +73,7 @@ export class AccessService {
   }
 
   async recordSuccessfulEntry(ip: string): Promise<void> {
+    if (this.isWhitelisted(ip)) return;
     await this.exclusive(ip, async () => {
       const state = await this.persistence.getIpAccess(ip);
       if (state === null || state.consecutiveMisses === 0) return;

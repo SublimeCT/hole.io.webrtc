@@ -127,6 +127,7 @@
 .online-icon-btn:hover,
 .online-ghost-btn:hover {
   border-color: var(--border-strong);
+  background: oklch(from var(--glass) calc(l + 0.05) c h / calc(alpha + 0.1));
   transform: translateY(-2px);
 }
 
@@ -477,6 +478,20 @@
   background: var(--surface);
   box-shadow: 0 30px 80px rgb(0 0 0 / 60%);
   animation: online-modal-in 220ms ease-out;
+}
+
+.online-modal.is-warning {
+  border-color: oklch(72% 0.22 35);
+  box-shadow:
+    0 0 0 1px oklch(72% 0.22 35 / 0.55),
+    0 30px 80px rgb(0 0 0 / 60%);
+}
+
+.online-warning-text {
+  margin: 0 0 20px;
+  font-size: 15px;
+  line-height: 1.6;
+  color: oklch(84% 0.15 45);
 }
 
 .online-modal h2 {

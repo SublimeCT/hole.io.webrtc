@@ -1,4 +1,5 @@
 import type {
+  PeerId,
   PlayerProfile,
   RoomCode,
   RoomErrorCode,
@@ -6,7 +7,7 @@ import type {
 } from "@hole-io/shared/protocol";
 import { multiplayerStore } from "../store/multiplayerStore";
 import { SignalingClient, resolveSignalingUrl } from "./signaling";
-import { StarConnectionManager } from "./starConnection";
+import { StarConnectionManager, type GameChannelKind } from "./starConnection";
 
 export interface MultiplayerSessionOptions {
   profile: PlayerProfile;
@@ -21,6 +22,9 @@ export class MultiplayerSession {
   private profile: PlayerProfile;
   private requestedRoomCode: RoomCode | null;
   private disposed = false;
+  private gameMessageHandler:
+    | ((peerId: PeerId, channel: GameChannelKind, data: string) => void)
+    | null = null;
 
   constructor(options: MultiplayerSessionOptions) {
     this.profile = options.profile;
@@ -45,6 +49,9 @@ export class MultiplayerSession {
       },
       onPeerStatus: (peerId, status) =>
         multiplayerStore.getState().setPeerConnection(peerId, status),
+      onChannelMessage: (peerId, channel, data) => {
+        this.gameMessageHandler?.(peerId, channel, data);
+      },
       onHostReady: () => {
         this.signaling.send({ type: "start-match" });
       },
@@ -64,6 +71,27 @@ export class MultiplayerSession {
 
   beginConnection(): void {
     this.signaling.send({ type: "begin-connection" });
+  }
+
+  /** OnlineGameDriver 注册游戏消息回调（host 收 InputPacket，guest 收快照/事件/checkpoint）。 */
+  setGameMessageHandler(
+    handler: ((peerId: PeerId, channel: GameChannelKind, data: string) => void) | null,
+  ): void {
+    this.gameMessageHandler = handler;
+  }
+
+  /** 在指定 DataChannel 上向 peerId 发送已编码文本。 */
+  sendGameData(peerId: PeerId, channel: GameChannelKind, data: string): boolean {
+    return this.peerConnections.send(peerId, channel, data);
+  }
+
+  /** 两条 DataChannel 都 open 的对端列表。 */
+  getGamePeerIds(): PeerId[] {
+    return this.peerConnections.getConnectedPeerIds();
+  }
+
+  get isHost(): boolean {
+    return this.peerConnections.hostMode;
   }
 
   updateProfile(profile: PlayerProfile): void {
@@ -145,6 +173,7 @@ export class MultiplayerSession {
         return;
       case "room-closed":
         this.peerConnections.close();
+        this.signaling.close(false); // 停止心跳
         multiplayerStore.getState().clearRoom();
         multiplayerStore.getState().setError(roomClosedMessage(message.reason));
         return;

@@ -383,18 +383,6 @@ function resolveBombs(
   return { holes: next, events };
 }
 
-function isFullyCoveredByHole(
-  hole: HoleState,
-  objectPosition: Vector2,
-  footprintRadius: number,
-): boolean {
-  return (
-    Math.hypot(objectPosition.x - hole.position.x, objectPosition.y - hole.position.y) +
-      footprintRadius <=
-    hole.radius
-  );
-}
-
 function canCaptureHole(winner: HoleState, loser: HoleState): boolean {
   return (
     winner.radius > loser.radius + 0.001 &&
@@ -1113,10 +1101,14 @@ export function stepSimulation(
         object.position.y - hole.position.y,
       );
       const mobileObject = object.motion !== null;
-      const canEnterWhileMoving =
-        canFitThroughHole(hole, object) &&
-        isFullyCoveredByHole(hole, object.position, footprintRadius);
-      if ((!mobileObject && distance <= hole.radius + footprintRadius) || canEnterWhileMoving) {
+
+      // For moving objects (vehicles), only activate if they can fit through the hole
+      // For static objects, activate on contact
+      const shouldActivate = mobileObject
+        ? canFitThroughHole(hole, object) && distance <= hole.radius + footprintRadius * 0.5
+        : distance <= hole.radius + footprintRadius;
+
+      if (shouldActivate) {
         objects[index] = activateObject(object, hole);
       }
     }

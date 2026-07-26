@@ -9,6 +9,10 @@ import type { PeerConnectionStatus } from "../store/multiplayerStore";
 
 const RELIABLE_CHANNEL = "game-reliable-v1";
 const UNRELIABLE_CHANNEL = "game-unreliable-v1";
+/** unreliable DataChannel 发送缓冲高水位：超过则丢弃新包（拥塞让路，旧快照本就该被新快照覆盖）。 */
+const MAX_DC_BUFFERED_BYTES = 256 * 1024;
+
+export type GameChannelKind = "reliable" | "unreliable";
 
 interface PeerLink {
   connection: RTCPeerConnection;
@@ -20,6 +24,8 @@ interface PeerLink {
 export interface StarConnectionOptions {
   sendSignal(message: ClientToServerMessage): void;
   onPeerStatus(peerId: PeerId, status: PeerConnectionStatus): void;
+  /** DataChannel 收到文本消息时上抛（按 channel label 区分 reliable/unreliable）。 */
+  onChannelMessage(peerId: PeerId, channel: GameChannelKind, data: string): void;
   onHostReady(): void;
   onError(message: string): void;
 }
@@ -210,11 +216,51 @@ export class StarConnectionManager {
     return channel;
   }
 
+  private channelKind(label: string): GameChannelKind | null {
+    if (label === RELIABLE_CHANNEL) return "reliable";
+    if (label === UNRELIABLE_CHANNEL) return "unreliable";
+    return null;
+  }
+
   private attachChannel(link: PeerLink, peerId: PeerId, channel: RTCDataChannel): void {
     channel.binaryType = "arraybuffer";
     channel.addEventListener("open", () => this.checkReady(link, peerId));
     channel.addEventListener("close", () => this.options.onPeerStatus(peerId, "closed"));
     channel.addEventListener("error", () => this.options.onPeerStatus(peerId, "failed"));
+    channel.addEventListener("message", (event: MessageEvent) => {
+      if (typeof event.data !== "string") return;
+      const kind = this.channelKind(channel.label);
+      if (kind !== null) this.options.onChannelMessage(peerId, kind, event.data);
+    });
+  }
+
+  /**
+   * 在指定 channel 上向 peerId 发送文本。unreliable 拥塞时丢弃（旧快照被新快照覆盖）；
+   * reliable 由浏览器排队保证到达。返回 false 表示 peer 不存在/通道未开/被丢弃。
+   */
+  send(peerId: PeerId, channel: GameChannelKind, data: string): boolean {
+    const link = this.links.get(peerId);
+    if (link === undefined) return false;
+    const dc = channel === "reliable" ? link.reliable : link.unreliable;
+    if (dc === null || dc.readyState !== "open") return false;
+    if (channel === "unreliable" && dc.bufferedAmount > MAX_DC_BUFFERED_BYTES) return false;
+    dc.send(data);
+    return true;
+  }
+
+  /** 当前两条 DataChannel 都已 open 的对端（host 端 = 全部已连 guests，guest 端 = [host]）。 */
+  getConnectedPeerIds(): PeerId[] {
+    const ids: PeerId[] = [];
+    for (const [peerId, link] of this.links) {
+      if (link.reliable?.readyState === "open" && link.unreliable?.readyState === "open") {
+        ids.push(peerId);
+      }
+    }
+    return ids;
+  }
+
+  get hostMode(): boolean {
+    return this.isHost;
   }
 
   private checkReady(link: PeerLink, peerId: PeerId): void {

@@ -218,7 +218,10 @@ export class RoomService {
     if (room.hostPeerId !== peerId) return { ok: false, error: "NOT_HOST" };
     if (room.status !== "lobby") return { ok: false, error: "INVALID_STATE" };
     const entered = [...room.members.values()].filter((member) => member.entered);
-    if (entered.length < 2 || entered.some((member) => !member.ready)) {
+    if (
+      entered.length < 2 ||
+      entered.some((member) => member.peerId !== room.hostPeerId && !member.ready)
+    ) {
       return { ok: false, error: "NOT_READY" };
     }
     const now = this.now();
@@ -259,7 +262,10 @@ export class RoomService {
     const matchId = randomUUID();
     const endsAt = now + MATCH_DURATION_MS;
     const members = [...room.members.values()].filter((member) => member.entered);
-    if (members.length < 2 || members.some((member) => !member.ready)) {
+    if (
+      members.length < 2 ||
+      members.some((member) => member.peerId !== room.hostPeerId && !member.ready)
+    ) {
       return { ok: false, error: "NOT_READY" };
     }
     await this.persistence.createMatch({

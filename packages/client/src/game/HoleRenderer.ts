@@ -6,8 +6,6 @@ import {
 } from "@hole-io/shared/simulation";
 import * as THREE from "three";
 
-import type { GamePreferences } from "../app/preferences";
-
 /**
  * 黑洞视觉状态机（参考设计 hole-states.html 的 01–08 状态）。
  *
@@ -70,16 +68,11 @@ const EXPLOSION_DURATION = 0.75;
 const STREAK_COUNT = 5;
 const RIPPLE_COUNT = 2;
 
-const BOT_COLORS: Record<string, number> = {
-  "bot-1": 0xff8a3d,
-  "bot-2": 0x5aa9e6,
-};
-
-function resolveColor(hole: HoleState, preferences: GamePreferences): THREE.Color {
-  if (hole.kind === "human") {
-    return new THREE.Color(preferences.playerRingColor);
-  }
-  return new THREE.Color(BOT_COLORS[hole.id] ?? 0x2bf0ff);
+function resolveColor(
+  hole: HoleState,
+  colors: ReadonlyMap<string, THREE.ColorRepresentation>,
+): THREE.Color {
+  return new THREE.Color(colors.get(hole.id) ?? 0x2bf0ff);
 }
 
 function makeRingMaterial(color: THREE.Color, opacity: number): THREE.MeshBasicMaterial {
@@ -93,9 +86,17 @@ function makeRingMaterial(color: THREE.Color, opacity: number): THREE.MeshBasicM
   });
 }
 
+export interface HoleRendererOptions {
+  /** 每个 hole（peerId / "player" / "bot-x"）对应的圆环颜色 #RRGGBB。 */
+  readonly colors: ReadonlyMap<string, THREE.ColorRepresentation>;
+  /** 本地玩家的 hole id，用于渲染本地专属视觉（加速拖尾/涟漪/引信/无敌盾牌）。 */
+  readonly localPlayerId: string;
+}
+
 export class HoleRenderer {
   readonly #scene: THREE.Scene;
-  readonly #preferences: GamePreferences;
+  readonly #colors: ReadonlyMap<string, THREE.ColorRepresentation>;
+  readonly #localPlayerId: string;
   readonly #visuals = new Map<string, HoleVisual>();
   readonly #geometries = new Set<THREE.BufferGeometry>();
   readonly #materials = new Set<THREE.Material>();
@@ -103,9 +104,10 @@ export class HoleRenderer {
   readonly #shieldTexture: THREE.CanvasTexture;
   readonly #crownTexture: THREE.CanvasTexture;
 
-  constructor(scene: THREE.Scene, preferences: GamePreferences) {
+  constructor(scene: THREE.Scene, options: HoleRendererOptions) {
     this.#scene = scene;
-    this.#preferences = preferences;
+    this.#colors = options.colors;
+    this.#localPlayerId = options.localPlayerId;
     this.#shieldTexture = this.#createEmojiTexture("🛡️");
     this.#crownTexture = this.#createEmojiTexture("👑");
   }
@@ -141,8 +143,8 @@ export class HoleRenderer {
 
   #createHoleVisual(hole: HoleState): HoleVisual {
     const group = new THREE.Group();
-    const color = resolveColor(hole, this.#preferences);
-    const isPlayer = hole.kind === "human";
+    const color = resolveColor(hole, this.#colors);
+    const isPlayer = hole.id === this.#localPlayerId;
 
     // stencil 切洞（地面开孔）。
     const maskGeometry = new THREE.CircleGeometry(1, RING_SEGMENTS);

@@ -246,7 +246,6 @@ export function stepActivePhysics(
     const fallMultiplier =
       group.hole?.activePowerUps.reduce((multiplier, effect) => {
         if (effect.type === "magnet") return Math.max(multiplier, 3);
-        if (effect.type === "beer") return Math.max(multiplier, 2);
         return multiplier;
       }, 1) ?? 1;
     world.gravity.set(0, -GRAVITY_METERS_PER_SECOND_SQUARED * fallMultiplier, 0);

@@ -18,11 +18,14 @@
 - host 与每个 guest 建立独立 `RTCPeerConnection`，包含 reliable 和 unordered/unreliable 双 DataChannel；全部通道 open 后才请求 start-match。
 - Ubuntu 生产部署使用 systemd，不使用 Docker；项目发布目录和操作流程见 `docs/deployment-ubuntu.md`。
 
-## 待完成：客户端联机
+## 已完成：客户端联机游戏循环
 
-- host 使用 `packages/shared/simulation` 驱动最多 5 名人类输入，约 10Hz 广播增量。
-- guest 快照插值、worldRevision 检查、checkpoint 分块重组与原子恢复。
-- WebRTC ICE/TURN 实机 NAT、移动网络切换、弱网和带宽压力测试。
+- `createMultiplayerSimulation(seed, spawnSeed, peerIds[])` 生成最多 5 名 human hole，id 等于 peerId。
+- `OnlineGameDriver` 统一驱动 host 和 guest 侧逻辑：host 约 60Hz 步进权威模拟并约 10Hz unreliable 广播 `StateDeltaSnapshot`；guest 约 30Hz unreliable 发送输入包，通过 `SnapshotInterpolator` 过滤乱序快照后 `applyDelta` 到本地渲染态。
+- `Game.createOnline(config)` 支持 `mode: "host" | "guest"`，host 侧处理 `setRemoteInput` 和 `buildCheckpoint`，guest 侧处理 `applyDelta` 和 `applyCheckpoint`，两者共用同一套 Three.js 渲染管线。
+- `snapshotCodec.ts` 实现 host↔guest 完整序列化：`stateToDeltaSnapshot`、`buildFullCheckpoint`、`splitCheckpointIntoChunks`、`applyDeltaToState`、`applyCheckpointToState`。
+- `MultiplayerProvider` Context 持久化 `MultiplayerSession`，跨 `/online`↔`/game` 路由导航不断线。
+- 颜色冲突检测改为模态弹窗（仅弹给受影响的非 host 玩家）；host 侧 ready check 后端已排除 host 自身。
 
 ## 已知限制
 

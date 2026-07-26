@@ -4,6 +4,7 @@ import { HashRouter, Navigate, Route, Routes } from "react-router-dom";
 import { HomePage } from "../pages/HomePage";
 import { OnlineRoomPage } from "../pages/OnlineRoomPage";
 import { ResultsPage } from "../pages/ResultsPage";
+import { MultiplayerProvider } from "../net/MultiplayerProvider";
 import { VoidWordmark } from "../ui/VoidWordmark";
 import { translate } from "./i18n";
 import { loadPreferences } from "./preferences";
@@ -13,20 +14,22 @@ const GamePage = lazy(() => import("../pages/GamePage"));
 export function App() {
   return (
     <HashRouter>
-      <Routes>
-        <Route path="/" element={<HomePage />} />
-        <Route path="/online" element={<OnlineRoomPage />} />
-        <Route
-          path="/game"
-          element={
-            <Suspense fallback={<RouteLoading />}>
-              <GamePage />
-            </Suspense>
-          }
-        />
-        <Route path="/results" element={<ResultsPage />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
+      <MultiplayerProvider>
+        <Routes>
+          <Route path="/" element={<HomePage />} />
+          <Route path="/online" element={<OnlineRoomPage />} />
+          <Route
+            path="/game"
+            element={
+              <Suspense fallback={<RouteLoading />}>
+                <GamePage />
+              </Suspense>
+            }
+          />
+          <Route path="/results" element={<ResultsPage />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </MultiplayerProvider>
     </HashRouter>
   );
 }

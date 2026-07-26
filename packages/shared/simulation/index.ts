@@ -5,4 +5,4 @@ export * from "./progression";
 export { stepSimulation } from "./simulation";
 export { SpatialHash } from "./spatialHash";
 export type * from "./types";
-export { createInitialSimulation } from "./world";
+export { createInitialSimulation, createMultiplayerSimulation } from "./world";

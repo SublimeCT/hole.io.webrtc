@@ -940,11 +940,41 @@ function buildCityObjects(): readonly WorldObjectState[] {
   return objects;
 }
 
-function createHoles(
+function makeHoleBase(id: string, position: Vector2): HoleState {
+  return {
+    id,
+    kind: "human",
+    position,
+    radius: INITIAL_HOLE_RADIUS,
+    score: 0,
+    eliminationRemaining: 0,
+    eliminations: 0,
+    revivesRemaining: 1,
+    invulnerabilityRemaining: 0,
+    speedBoostRemaining: 0,
+    speedBoostCooldown: 0,
+    radiusBoostRemaining: 0,
+    radiusBoostCooldown: 0,
+    bombFuseRemaining: 0,
+    bombCooldown: 0,
+    activePowerUps: [],
+    nextPoopDropIn: 0,
+    isOut: false,
+    bot: null,
+  };
+}
+
+/**
+ * 确定性地生成 count 个互不重叠且远离地图物体的出生点。
+ * 相同 seed + 相同 objects + 相同 count 永远得到相同序列；count 只决定循环何时停止，
+ * 因此前 min(count) 个出生点与更小 count 的结果完全一致（单机 3 人与联机 N 人可对齐）。
+ */
+function generateSpawnPositions(
   seed: number,
   objects: readonly WorldObjectState[],
-): readonly [readonly HoleState[], number] {
-  const holes: HoleState[] = [];
+  count: number,
+): readonly [readonly Vector2[], number] {
+  const positions: Vector2[] = [];
   let rngState = seed >>> 0;
   const spawnLimitX = MAP_HALF_WIDTH - INITIAL_HOLE_RADIUS - 1;
   const spawnLimitY = MAP_HALF_HEIGHT - INITIAL_HOLE_RADIUS - 1;
@@ -1001,7 +1031,8 @@ function createHoles(
     }
     return true;
   };
-  for (let index = 0; index <= BOT_COUNT; index += 1) {
+  const minSpawnGap = INITIAL_HOLE_RADIUS * 2 + 12;
+  for (let index = 0; index < count; index += 1) {
     let position: Vector2 | null = null;
     for (let attempt = 0; attempt < SPAWN_ATTEMPTS; attempt += 1) {
       const [randomX, stateAfterX] = nextRandom(rngState);
@@ -1013,10 +1044,9 @@ function createHoles(
       };
       if (
         isObjectFree(candidate) &&
-        holes.every(
-          (hole) =>
-            Math.hypot(hole.position.x - candidate.x, hole.position.y - candidate.y) >=
-            hole.radius + INITIAL_HOLE_RADIUS + 12,
+        positions.every(
+          (existing) =>
+            Math.hypot(existing.x - candidate.x, existing.y - candidate.y) >= minSpawnGap,
         )
       ) {
         position = candidate;
@@ -1026,45 +1056,39 @@ function createHoles(
     if (!position) {
       throw new Error("Unable to find a non-overlapping initial hole spawn");
     }
-    holes.push({
-      id: index === 0 ? "player" : `bot-${index}`,
-      kind: index === 0 ? "human" : "bot",
-      position,
-      radius: INITIAL_HOLE_RADIUS,
-      score: 0,
-      eliminationRemaining: 0,
-      eliminations: 0,
-      revivesRemaining: 1,
-      invulnerabilityRemaining: 0,
-      speedBoostRemaining: 0,
-      speedBoostCooldown: 0,
-      radiusBoostRemaining: 0,
-      radiusBoostCooldown: 0,
-      bombFuseRemaining: 0,
-      bombCooldown: 0,
-      activePowerUps: [],
-      nextPoopDropIn: 0,
-      isOut: false,
-      bot:
-        index === 0
-          ? null
-          : {
-              mode: "wander",
-              targetObjectId: null,
-              targetScore: 0,
-              commitRemaining: 0,
-              sectorIndex: index,
-              wanderAngle: index * Math.PI,
-              rethinkIn: 0,
-            },
-    });
+    positions.push(position);
   }
+  return [positions, rngState];
+}
+
+function createHoles(
+  seed: number,
+  objects: readonly WorldObjectState[],
+): readonly [readonly HoleState[], number] {
+  const [positions, rngState] = generateSpawnPositions(seed, objects, BOT_COUNT + 1);
+  const holes: HoleState[] = positions.map((position, index) => {
+    if (index === 0) return makeHoleBase("player", position);
+    const hole = makeHoleBase(`bot-${index}`, position);
+    hole.kind = "bot";
+    hole.bot = {
+      mode: "wander",
+      targetObjectId: null,
+      targetScore: 0,
+      commitRemaining: 0,
+      sectorIndex: index,
+      wanderAngle: index * Math.PI,
+      rethinkIn: 0,
+    };
+    return hole;
+  });
   return [holes, rngState];
 }
 
-export function createInitialSimulation(seed = 0x5eed1234, spawnSeed = seed): SimulationState {
-  const objects = buildCityObjects();
-  const [holes, holeRngState] = createHoles(spawnSeed, objects);
+function assembleSimulationState(
+  objects: readonly WorldObjectState[],
+  holes: readonly HoleState[],
+  holeRngState: number,
+): SimulationState {
   let rngState = holeRngState;
   const powerUps: MapPowerUp[] = [];
   for (let index = 0; index < holes.length; index += 1) {
@@ -1098,4 +1122,32 @@ export function createInitialSimulation(seed = 0x5eed1234, spawnSeed = seed): Si
     nextPowerUpSpawnAt: 60,
     rngState,
   };
+}
+
+export function createInitialSimulation(seed = 0x5eed1234, spawnSeed = seed): SimulationState {
+  const objects = buildCityObjects();
+  const [holes, holeRngState] = createHoles(spawnSeed, objects);
+  return assembleSimulationState(objects, holes, holeRngState);
+}
+
+/**
+ * 联机初始世界：host 与所有 guest 用相同 (mapSeed, spawnSeed, peerIds) 调用，
+ * 得到字节级一致的初始 SimulationState（固定地图 + 确定性出生点 + 确定性道具）。
+ * peerIds 顺序决定 holeIndex 与 hole.id，host 必须按统一排序广播 PlayerAssignment。
+ * 不生成 Bot（联机 roster 仅真人）。peerIds 长度限制 2..5（房间人数上限）。
+ */
+export function createMultiplayerSimulation(
+  seed = 0x5eed1234,
+  spawnSeed = seed,
+  peerIds: readonly string[],
+): SimulationState {
+  if (peerIds.length < 2 || peerIds.length > 5) {
+    throw new Error(`联机玩家数必须在 2 到 5 之间，收到 ${peerIds.length}`);
+  }
+  const objects = buildCityObjects();
+  const [positions, holeRngState] = generateSpawnPositions(spawnSeed, objects, peerIds.length);
+  const holes: readonly HoleState[] = positions.map((position, index) =>
+    makeHoleBase(peerIds[index] ?? `player-${index}`, position),
+  );
+  return assembleSimulationState(objects, holes, holeRngState);
 }
