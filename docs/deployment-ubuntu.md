@@ -37,6 +37,26 @@
 
 ## 3. 后端环境文件
 
+```sql
+-- 1. create user
+CREATE USER holeio WITH PASSWORD 'your-password';
+-- 2. create database
+CREATE DATABASE holeio OWNER holeio;
+
+-- 3. Granting permissions
+GRANT ALL ON SCHEMA public TO holeio;
+
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO holeio;
+
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO holeio;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+GRANT ALL ON TABLES TO holeio;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+GRANT ALL ON SEQUENCES TO holeio;
+```
+
 将实际配置保存在：
 
 ```text
