@@ -1,0 +1,5 @@
+interface:
+  display_name: "Drizzle PostgreSQL"
+  short_description: "Enforce this project's safe PostgreSQL persistence boundaries"
+  default_prompt: "Use $drizzle-postgres to implement or review the Fastify PostgreSQL and Drizzle persistence layer for this project."
+

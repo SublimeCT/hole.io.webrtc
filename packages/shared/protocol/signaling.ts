@@ -1,139 +1,230 @@
-// 协议真源：WebRTC 信令 + 房间管理（客户端 ↔ 信令服务，单一 WSS 通道，JSON）。
-// 对应 AGENTS.md §4。纯类型定义（erasable TS），client 与 server 共用，禁止两边各维护一份。
-// 信令服务地址 wss://<host>/ws。握手（signal 交换 SDP/ICE）建立 P2P 星型后，WSS 可断（除非走 TURN）。
+import { Type, type Static } from "@sinclair/typebox";
+import { Value } from "@sinclair/typebox/value";
 
-export type PeerId = string;
-export type RoomCode = string;
-export type SignalKind = "offer" | "answer" | "ice";
+export const ROOM_CODE_PATTERN = "^[A-HJ-NP-Z2-9]{6}$";
+export const PLAYER_COLOR_PATTERN = "^#[0-9A-Fa-f]{6}$";
+export const PLATFORM_PATTERN = "^[A-Za-z0-9 ._+()/#:-]{1,20}$";
+export const PLAYER_NAME_PATTERN = /^[\p{L}\p{N}_ -]+$/u;
+export const SUPPORTED_LANGUAGES = [
+  "zh-CN",
+  "zh-TW",
+  "en",
+  "fr",
+  "ja",
+  "es",
+  "ko",
+  "de",
+  "pt",
+  "ar",
+] as const;
 
-export interface PeerInfo {
+const PeerIdSchema = Type.String({
+  minLength: 1,
+  maxLength: 64,
+  pattern: "^[A-Za-z0-9-]+$",
+});
+const RoomCodeSchema = Type.String({ minLength: 6, maxLength: 6, pattern: ROOM_CODE_PATTERN });
+const LanguageSchema = Type.Union(SUPPORTED_LANGUAGES.map((language) => Type.Literal(language)));
+
+export const PlayerProfileSchema = Type.Object(
+  {
+    playerName: Type.String({ minLength: 2, maxLength: 10 }),
+    color: Type.String({ minLength: 7, maxLength: 7, pattern: PLAYER_COLOR_PATTERN }),
+    language: LanguageSchema,
+    platform: Type.String({ minLength: 1, maxLength: 20, pattern: PLATFORM_PATTERN }),
+  },
+  { additionalProperties: false },
+);
+
+export type PeerId = Static<typeof PeerIdSchema>;
+export type RoomCode = Static<typeof RoomCodeSchema>;
+export type PlayerProfile = Static<typeof PlayerProfileSchema>;
+export type SupportedLanguage = Static<typeof LanguageSchema>;
+export type RoomStatus = "lobby" | "connecting" | "playing";
+
+export interface RoomPeer {
   peerId: PeerId;
-  playerName: string;
+  profile: PlayerProfile;
   isHost: boolean;
+  entered: boolean;
+  ready: boolean;
 }
 
-export type RoomClosedReason = "host-left" | "idle" | "closed";
+export interface RoomState {
+  roomCode: RoomCode;
+  status: RoomStatus;
+  cycle: number;
+  peers: readonly RoomPeer[];
+  lobbyExpiresAt: number | null;
+  connectionExpiresAt: number | null;
+  matchEndsAt: number | null;
+}
 
-export type RoomErrorCode =
-  | "ROOM_NOT_FOUND"
-  | "ROOM_FULL"
-  | "NOT_HOST"
-  | "EMPTY"
-  | "ALREADY_STARTED"
-  | "INVALID_CODE";
-
-/** coturn auth-secret 短期凭证，建房/加入时下发，客户端塞进 RTCPeerConnection.iceServers。 */
 export interface TurnCredentials {
-  /** "{expiryEpoch}:{peerId}"，coturn 按 use-auth-secret 校验。 */
   username: string;
-  /** hmac-sha1(secret, username) 的 hex。 */
   credential: string;
-  /** 有效期（秒）。 */
   ttl: number;
-  /** TURN 服务器地址列表，如 "turn:host:3478?transport=udp"。 */
   uris: readonly string[];
 }
 
-// ===== client → server =====
+const CreateRoomSchema = Type.Object(
+  { type: Type.Literal("create-room"), profile: PlayerProfileSchema },
+  { additionalProperties: false },
+);
+const EnterRoomSchema = Type.Object(
+  { type: Type.Literal("enter-room"), roomCode: RoomCodeSchema, profile: PlayerProfileSchema },
+  { additionalProperties: false },
+);
+const SetReadySchema = Type.Object(
+  { type: Type.Literal("set-ready"), ready: Type.Boolean() },
+  { additionalProperties: false },
+);
+const EmptyMessage = <T extends string>(type: T) =>
+  Type.Object({ type: Type.Literal(type) }, { additionalProperties: false });
 
-export interface CreateRoomMessage {
-  type: "create-room";
-  playerName: string;
-}
+const SessionDescriptionSchema = Type.Object(
+  {
+    sdp: Type.String({ minLength: 1, maxLength: 65_535 }),
+  },
+  { additionalProperties: false },
+);
+const IceCandidateSchema = Type.Object(
+  {
+    candidate: Type.String({ maxLength: 4096 }),
+    sdpMid: Type.Union([Type.String({ maxLength: 256 }), Type.Null()]),
+    sdpMLineIndex: Type.Union([Type.Integer({ minimum: 0, maximum: 65_535 }), Type.Null()]),
+    usernameFragment: Type.Optional(Type.Union([Type.String({ maxLength: 256 }), Type.Null()])),
+  },
+  { additionalProperties: false },
+);
+const SignalOfferSchema = Type.Object(
+  {
+    type: Type.Literal("signal-offer"),
+    toPeerId: PeerIdSchema,
+    description: SessionDescriptionSchema,
+  },
+  { additionalProperties: false },
+);
+const SignalAnswerSchema = Type.Object(
+  {
+    type: Type.Literal("signal-answer"),
+    toPeerId: PeerIdSchema,
+    description: SessionDescriptionSchema,
+  },
+  { additionalProperties: false },
+);
+const SignalIceSchema = Type.Object(
+  {
+    type: Type.Literal("signal-ice"),
+    toPeerId: PeerIdSchema,
+    candidate: IceCandidateSchema,
+  },
+  { additionalProperties: false },
+);
+const HeartbeatSchema = Type.Object(
+  {
+    type: Type.Literal("heartbeat"),
+    clientTime: Type.Integer({ minimum: 0 }),
+  },
+  { additionalProperties: false },
+);
 
-export interface JoinRoomMessage {
-  type: "join-room";
-  roomCode: RoomCode;
-  playerName: string;
-}
+export const ClientToServerMessageSchema = Type.Union([
+  CreateRoomSchema,
+  EnterRoomSchema,
+  SetReadySchema,
+  EmptyMessage("begin-connection"),
+  SignalOfferSchema,
+  SignalAnswerSchema,
+  SignalIceSchema,
+  EmptyMessage("start-match"),
+  EmptyMessage("leave-room"),
+  EmptyMessage("close-room"),
+  HeartbeatSchema,
+]);
 
-/** host 专用：确认与房内所有 guest 的 P2P 连接建立成功后发送，告知 server 房间进入 playing。 */
-export interface StartMatchMessage {
-  type: "start-match";
-}
+export type ClientToServerMessage = Static<typeof ClientToServerMessageSchema>;
+export type SignalOutMessage = Extract<
+  ClientToServerMessage,
+  { type: "signal-offer" | "signal-answer" | "signal-ice" }
+>;
 
-/** host 专用：主动解散房间。 */
-export interface CloseRoomMessage {
-  type: "close-room";
-}
+export type RoomClosedReason = "idle" | "host-timeout" | "host-left" | "closed" | "server-shutdown";
 
-/** 统一信令消息：server 不解 payload，只按 toPeerId 在同房内路由。 */
-export interface SignalOutMessage {
-  type: "signal";
-  toPeerId: PeerId;
-  kind: SignalKind;
-  /** 序列化的 SDP 或 RTCIceCandidateInit JSON。 */
-  payload: string;
-}
-
-export type ClientToServerMessage =
-  | CreateRoomMessage
-  | JoinRoomMessage
-  | StartMatchMessage
-  | CloseRoomMessage
-  | SignalOutMessage;
-
-// ===== server → client =====
-
-export interface RoomCreatedMessage {
-  type: "room-created";
-  roomCode: RoomCode;
-  peerId: PeerId;
-  /** 创建者即 host，isHost 隐含为 true。 */
-  turn: TurnCredentials;
-}
-
-export interface RoomJoinedMessage {
-  type: "room-joined";
-  roomCode: RoomCode;
-  peerId: PeerId;
-  hostPeerId: PeerId;
-  /** 加入前已在房内的其他 peer（含 host），供新加入者向其发起 signal。 */
-  existingPeers: readonly PeerInfo[];
-  turn: TurnCredentials;
-}
-
-export interface PeerJoinedMessage {
-  type: "peer-joined";
-  peer: PeerInfo;
-}
-
-export interface PeerLeftMessage {
-  type: "peer-left";
-  peerId: PeerId;
-}
-
-/**
- * 房间关闭，由 server 推送（非任何 peer 发送）：
- * - host-left：lobby 阶段 host 的 WSS 断开。
- * - idle：房间创建后 3 分钟内未 start-match。
- * - closed：host 主动 close-room。
- * 注意：playing 阶段 host 断开不触发房间关闭（游戏进入纯 P2P 自治）。
- */
-export interface RoomClosedMessage {
-  type: "room-closed";
-  reason: RoomClosedReason;
-}
-
-/** server 转发的信令：把出站 toPeerId 改写为入站 fromPeerId（发送者）。 */
-export interface SignalInMessage {
-  type: "signal";
-  fromPeerId: PeerId;
-  kind: SignalKind;
-  payload: string;
-}
-
-export interface RoomErrorMessage {
-  type: "room-error";
-  code: RoomErrorCode;
-  message: string;
-}
+export type RoomErrorCode =
+  | "INVALID_MESSAGE"
+  | "ROOM_UNAVAILABLE"
+  | "ROOM_FULL"
+  | "ROOM_LIMIT_REACHED"
+  | "ALREADY_IN_ROOM"
+  | "NOT_IN_ROOM"
+  | "NOT_HOST"
+  | "NOT_READY"
+  | "INVALID_STATE"
+  | "MATCH_IN_PROGRESS"
+  | "SIGNAL_NOT_ALLOWED"
+  | "RATE_LIMITED"
+  | "ACCESS_BLOCKED"
+  | "INTERNAL_ERROR";
 
 export type ServerToClientMessage =
-  | RoomCreatedMessage
-  | RoomJoinedMessage
-  | PeerJoinedMessage
-  | PeerLeftMessage
-  | RoomClosedMessage
-  | SignalInMessage
-  | RoomErrorMessage;
+  | {
+      type: "connected";
+      peerId: PeerId;
+      heartbeatIntervalMs: number;
+      heartbeatTimeoutMs: number;
+    }
+  | { type: "room-created"; room: RoomState; turn: TurnCredentials }
+  | { type: "room-entered"; room: RoomState; turn: TurnCredentials }
+  | { type: "room-state"; room: RoomState }
+  | { type: "connection-started"; room: RoomState }
+  | {
+      type: "signal-offer";
+      fromPeerId: PeerId;
+      description: { sdp: string };
+    }
+  | {
+      type: "signal-answer";
+      fromPeerId: PeerId;
+      description: { sdp: string };
+    }
+  | {
+      type: "signal-ice";
+      fromPeerId: PeerId;
+      candidate: Static<typeof IceCandidateSchema>;
+    }
+  | { type: "match-started"; matchId: string; matchEndsAt: number; room: RoomState }
+  | {
+      type: "match-ended";
+      matchId: string;
+      roomCode: RoomCode;
+      rejoinDeadline: number;
+      reason: "time-limit";
+    }
+  | { type: "room-closed"; roomCode: RoomCode; reason: RoomClosedReason }
+  | { type: "heartbeat-ack"; clientTime: number; serverTime: number }
+  | { type: "room-error"; code: RoomErrorCode; message: string };
+
+export function isClientToServerMessage(value: unknown): value is ClientToServerMessage {
+  return Value.Check(ClientToServerMessageSchema, value);
+}
+
+export function normalizePlayerProfile(profile: PlayerProfile): PlayerProfile | null {
+  const playerName = profile.playerName.normalize("NFKC").trim();
+  const platform = profile.platform.normalize("NFKC").trim();
+  const nameLength = Array.from(playerName).length;
+  if (
+    nameLength < 2 ||
+    nameLength > 10 ||
+    !PLAYER_NAME_PATTERN.test(playerName) ||
+    !new RegExp(PLATFORM_PATTERN).test(platform)
+  ) {
+    return null;
+  }
+  return {
+    playerName,
+    color: profile.color.toUpperCase(),
+    language: profile.language,
+    platform,
+  };
+}

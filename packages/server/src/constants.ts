@@ -1,0 +1,14 @@
+export const MAX_ROOMS = 20;
+export const MAX_PEERS_PER_ROOM = 5;
+export const ROOM_IDLE_MS = 3 * 60 * 1000;
+export const CONNECTION_TIMEOUT_MS = 30 * 1000;
+export const MATCH_DURATION_MS = 180 * 1000;
+export const HEARTBEAT_INTERVAL_MS = 4 * 1000;
+export const HEARTBEAT_TIMEOUT_MS = 8 * 1000;
+export const ROOM_SWEEP_INTERVAL_MS = 1000;
+export const MAX_WS_PAYLOAD_BYTES = 128 * 1024;
+export const WS_MESSAGES_PER_SECOND = 30;
+export const INVALID_MESSAGES_BEFORE_CLOSE = 3;
+export const TEMP_BLOCK_THRESHOLD = 5;
+export const PERMANENT_BLOCK_THRESHOLD = 10;
+export const TEMP_BLOCK_MS = 5 * 60 * 1000;

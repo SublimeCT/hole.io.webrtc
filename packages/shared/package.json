@@ -12,6 +12,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@sinclair/typebox": "^0.34.0",
     "cannon-es": "^0.20.0"
   }
 }

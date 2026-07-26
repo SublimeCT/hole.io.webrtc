@@ -1,0 +1,314 @@
+{
+  "id": "ecce3045-3313-4f05-8c11-f27f4655204b",
+  "prevId": "b493d2d7-5ea3-4463-9153-d49acfcc5c7c",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "public.ip_access_states": {
+      "name": "ip_access_states",
+      "schema": "",
+      "columns": {
+        "ip": {
+          "name": "ip",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "consecutive_misses": {
+          "name": "consecutive_misses",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "total_misses": {
+          "name": "total_misses",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "blocked_until": {
+          "name": "blocked_until",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "permanently_blocked": {
+          "name": "permanently_blocked",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "ip_access_consecutive_nonnegative": {
+          "name": "ip_access_consecutive_nonnegative",
+          "value": "\"ip_access_states\".\"consecutive_misses\" >= 0"
+        },
+        "ip_access_total_nonnegative": {
+          "name": "ip_access_total_nonnegative",
+          "value": "\"ip_access_states\".\"total_misses\" >= 0"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.match_players": {
+      "name": "match_players",
+      "schema": "",
+      "columns": {
+        "match_id": {
+          "name": "match_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "peer_id": {
+          "name": "peer_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "player_name": {
+          "name": "player_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "color": {
+          "name": "color",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "language": {
+          "name": "language",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "platform": {
+          "name": "platform",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "is_host": {
+          "name": "is_host",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "match_players_match_id_matches_id_fk": {
+          "name": "match_players_match_id_matches_id_fk",
+          "tableFrom": "match_players",
+          "tableTo": "matches",
+          "columnsFrom": ["match_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "match_players_match_id_peer_id_pk": {
+          "name": "match_players_match_id_peer_id_pk",
+          "columns": ["match_id", "peer_id"]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "match_players_name_length": {
+          "name": "match_players_name_length",
+          "value": "char_length(\"match_players\".\"player_name\") between 2 and 10"
+        },
+        "match_players_color_format": {
+          "name": "match_players_color_format",
+          "value": "\"match_players\".\"color\" ~ '^#[0-9A-F]{6}$'"
+        },
+        "match_players_language_valid": {
+          "name": "match_players_language_valid",
+          "value": "\"match_players\".\"language\" in ('zh-CN', 'zh-TW', 'en', 'fr', 'ja', 'es', 'ko', 'de', 'pt', 'ar')"
+        },
+        "match_players_platform_length": {
+          "name": "match_players_platform_length",
+          "value": "char_length(\"match_players\".\"platform\") between 1 and 20"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.matches": {
+      "name": "matches",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "room_code": {
+          "name": "room_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "cycle": {
+          "name": "cycle",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ends_at": {
+          "name": "ends_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "finished_at": {
+          "name": "finished_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "finish_reason": {
+          "name": "finish_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "matches_room_code_rooms_code_fk": {
+          "name": "matches_room_code_rooms_code_fk",
+          "tableFrom": "matches",
+          "tableTo": "rooms",
+          "columnsFrom": ["room_code"],
+          "columnsTo": ["code"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "matches_cycle_positive": {
+          "name": "matches_cycle_positive",
+          "value": "\"matches\".\"cycle\" > 0"
+        },
+        "matches_time_order": {
+          "name": "matches_time_order",
+          "value": "\"matches\".\"ends_at\" > \"matches\".\"started_at\""
+        },
+        "matches_finish_reason_valid": {
+          "name": "matches_finish_reason_valid",
+          "value": "\"matches\".\"finish_reason\" is null or \"matches\".\"finish_reason\" in ('time-limit', 'host-timeout', 'host-left', 'closed', 'server-shutdown')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.rooms": {
+      "name": "rooms",
+      "schema": "",
+      "columns": {
+        "code": {
+          "name": "code",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "host_peer_id": {
+          "name": "host_peer_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "cycle": {
+          "name": "cycle",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "closed_at": {
+          "name": "closed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "rooms_code_format": {
+          "name": "rooms_code_format",
+          "value": "\"rooms\".\"code\" ~ '^[A-HJ-NP-Z2-9]{6}$'"
+        },
+        "rooms_status_valid": {
+          "name": "rooms_status_valid",
+          "value": "\"rooms\".\"status\" in ('lobby', 'connecting', 'playing', 'closed')"
+        },
+        "rooms_cycle_positive": {
+          "name": "rooms_cycle_positive",
+          "value": "\"rooms\".\"cycle\" > 0"
+        }
+      },
+      "isRLSEnabled": false
+    }
+  },
+  "enums": {},
+  "schemas": {},
+  "sequences": {},
+  "roles": {},
+  "policies": {},
+  "views": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  }
+}

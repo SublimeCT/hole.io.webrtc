@@ -5,6 +5,7 @@ import { applyDocumentLanguage } from "./app/i18n";
 import { loadPreferences } from "./app/preferences";
 import "./style.css";
 import "./styles/home.css";
+import "./styles/online-room.css";
 import "./styles/game.css";
 import "./styles/results.css";
 

@@ -1,7 +1,4 @@
-// DataChannel 实时同步协议（host ↔ guests，P2P 星型，不经信令服务）。
-// 照 packages/shared/simulation/types.ts 的 HoleState / WorldObjectState 定义，去掉客户端不需要的内部字段。
-// host 权威循环（Phase 3）才使用；信令服务端不引用本文件。
-
+// RTCDataChannel 实时同步协议。固定为 host ↔ guest 星型，不经过信令服务。
 import type {
   AbilityId,
   ActivePowerUp,
@@ -13,23 +10,15 @@ import type {
   Vector3,
 } from "../simulation/types.js";
 
-/**
- * 输入包（guest → host，约 30Hz，unreliable channel）。
- * 只携带归一化方向 + 序号 + 客户端时间戳 + 本帧触发的技能，
- * 绝不携带位置/分数（AGENTS.md §0.1「客户端永不信任自己的状态」、§4 硬性规则）。
- */
 export interface InputPacket {
+  type: "input";
+  matchId: string;
   seq: number;
   direction: Vector2;
   clientTime: number;
   abilities?: readonly AbilityId[];
 }
 
-/**
- * 玩家洞快照（照 HoleState，去 bot 内部状态；id 用 peerId）。
- * 阵亡/无敌/出局字段驱动 K.O.、皇冠、无敌闪烁等视觉。
- * 技能字段保持 optional，兼容渐进上线。
- */
 export interface PlayerSnapshot {
   peerId: string;
   position: Vector2;
@@ -37,11 +26,10 @@ export interface PlayerSnapshot {
   score: number;
   eliminations: number;
   revivesRemaining: number;
-  /** >0 表示 K.O. 倒计时中（阵亡待复活）。 */
   eliminationRemaining: number;
-  /** >0 表示复活后无敌中。 */
   invulnerabilityRemaining: number;
   isOut: boolean;
+  lastProcessedInputSeq: number;
   speedBoostRemaining?: number;
   radiusBoostRemaining?: number;
   bombFuseRemaining?: number;
@@ -51,11 +39,9 @@ export interface PlayerSnapshot {
   activePowerUps: readonly ActivePowerUp[];
 }
 
-/** 活跃物体（status="active"，正在下落/倾倒）的位姿快照，照 WorldObjectState 取渲染+插值所需字段。 */
 export interface ActiveObjectSnapshot {
   id: string;
   position: Vector2;
-  /** 高度（下落中变化）。 */
   centerY: number;
   rotation: Quaternion;
   velocity: Vector3;
@@ -63,22 +49,35 @@ export interface ActiveObjectSnapshot {
   activeTime: number;
 }
 
+/** 地图基线的物体发生变化后用于重建的覆盖值；初始状态的物体不进入 checkpoint。 */
+export type ObjectStateOverride =
+  | { id: string; state: "consumed" }
+  | { id: string; state: "active"; object: ActiveObjectSnapshot }
+  | {
+      id: string;
+      state: "settled";
+      position: Vector2;
+      centerY: number;
+      rotation: Quaternion;
+    };
+
 /**
- * 状态快照（host → 所有 guest，约 10Hz，unreliable channel）。
- * 车辆/行人不进快照：它们是确定性 route 运动（基于 elapsed），guest 用 host 的 elapsed +
- * 地图初始 routeMotion + simulation 的 route/交通灯逻辑本地推算（AGENTS.md §4「客户端本地已知的不传」）。
- * 地图静止物体同样不进快照（客户端加载时已知初始状态）。
+ * host → guest，约 10Hz，走 unordered/unreliable channel。
+ * 快照自身允许丢失；只有 baseWorldRevision 与接收端 revision 不匹配时才需要可靠重同步。
  */
-export interface StateSnapshot {
-  seq: number;
-  serverTime: number;
+export interface StateDeltaSnapshot {
+  type: "state-delta";
+  matchId: string;
+  snapshotSeq: number;
+  hostTick: number;
+  baseWorldRevision: number;
+  worldRevision: number;
+  hostTime: number;
   elapsed: number;
   remaining: number;
   status: "playing" | "finished";
   players: readonly PlayerSnapshot[];
-  activeObjects: readonly ActiveObjectSnapshot[];
-  /** 本帧新被吞噬的物体 id（客户端移除对应实例）。 */
-  consumedObjectIds: readonly string[];
+  changedObjects: readonly ObjectStateOverride[];
   powerUps: readonly MapPowerUp[];
   footprints: readonly FootprintStrike[];
   poopHazards: readonly PoopHazard[];
@@ -87,19 +86,98 @@ export interface StateSnapshot {
 export interface PlayerAssignment {
   peerId: string;
   playerName: string;
-  /** 对应 SimulationState.holes 的下标。 */
   holeIndex: number;
 }
 
+/** reliable channel 上按顺序应用的离散世界事件。 */
+export type WorldEvent =
+  | {
+      type: "object-consumed";
+      matchId: string;
+      worldRevision: number;
+      objectId: string;
+      creditedPeerIds: readonly string[];
+    }
+  | {
+      type: "player-eliminated";
+      matchId: string;
+      worldRevision: number;
+      peerId: string;
+      creditedPeerId: string | null;
+    }
+  | {
+      type: "player-revived";
+      matchId: string;
+      worldRevision: number;
+      peerId: string;
+    }
+  | {
+      type: "power-up-changed";
+      matchId: string;
+      worldRevision: number;
+      powerUps: readonly MapPowerUp[];
+    };
+
 /**
- * 关键事件（reliable channel，host 经 DataChannel 广播，server 不参与）。
- * match-start 与信令层的 start-match（WSS 房间状态通知）是两件事：前者是游戏开始事件，后者是房间进入 playing。
+ * 相同 mapId/mapRevision/seed 基线下可独立重建整个可观察世界的可靠 checkpoint。
+ * objectOverrides 只列出偏离地图初始状态的物体。
  */
+export interface FullStateCheckpoint {
+  matchId: string;
+  checkpointId: string;
+  snapshotSeq: number;
+  hostTick: number;
+  worldRevision: number;
+  mapId: string;
+  mapRevision: string;
+  seed: number;
+  hostTime: number;
+  elapsed: number;
+  remaining: number;
+  players: readonly PlayerSnapshot[];
+  objectOverrides: readonly ObjectStateOverride[];
+  powerUps: readonly MapPowerUp[];
+  footprints: readonly FootprintStrike[];
+  poopHazards: readonly PoopHazard[];
+}
+
+export interface ResyncRequest {
+  type: "resync-request";
+  matchId: string;
+  expectedWorldRevision: number;
+  receivedBaseWorldRevision: number;
+  lastSnapshotSeq: number;
+}
+
+/** checkpoint JSON 序列化后分块发送，接收端仅在全部 chunk 到齐后原子应用。 */
+export interface CheckpointChunk {
+  type: "checkpoint-chunk";
+  matchId: string;
+  checkpointId: string;
+  chunkIndex: number;
+  chunkCount: number;
+  encoding: "json";
+  payload: string;
+}
+
 export type GameEvent =
   | {
       type: "match-start";
+      matchId: string;
       seed: number;
+      mapId: string;
+      mapRevision: string;
       matchDurationSeconds: number;
       players: readonly PlayerAssignment[];
     }
-  | { type: "match-end"; ranking: readonly PlayerAssignment[] };
+  | {
+      type: "match-end";
+      matchId: string;
+      ranking: readonly PlayerAssignment[];
+    }
+  | WorldEvent
+  | ResyncRequest
+  | CheckpointChunk;
+
+/** 旧名称保留为类型别名，现有插值调用点迁移时不会复制协议定义。 */
+export type StateSnapshot = StateDeltaSnapshot;

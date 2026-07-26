@@ -29,12 +29,12 @@
 - **语言**：Node.js + TypeScript（不用 Rust —— 后端职责薄，全是 I/O 转发/存储，用不上 Rust 的性能优势，反而拖慢 agent 迭代速度）。
 - **进程**：一个 **Fastify** 进程同时承担信令 WebSocket（`@fastify/websocket`）和存档 REST API，不单独起两个服务，省一份常驻内存开销，部署也更简单（一个 PM2 进程）。
 - **不用 socket.io**：信令消息就是几种简单 JSON 转发，原始 WebSocket 够用，不需要 socket.io 那套自动重连/命名空间机制。
-- **数据库**：SQLite（`better-sqlite3`），查询层用 **Drizzle**（类型安全、无代码生成/运行时开销，比裸写 SQL 或用 Prisma 更适合 agent 生成代码）。
+- **数据库**：PostgreSQL（用户和数据库名均为 `holeio`），连接池使用 `pg` / `@fastify/postgres`，查询和 migration 使用 **Drizzle**。密码、连接串、TURN secret 等敏感信息只从环境变量、`.env.local` 或 `.env` 读取。
 - **TURN/STUN**：`coturn`，独立 Docker 容器，不是我们写代码的部分。
 
 ### 联机协议
 
-- WebRTC `RTCDataChannel`，高频位置类数据用 `{ordered: false, maxRetransmits: 0}`（类 UDP，允许丢包不重传），关键事件（房间开始/结束/玩家加入）用默认 reliable channel。
+- WebRTC `RTCDataChannel`，高频输入/位置增量用 `{ordered: false, maxRetransmits: 0}`（类 UDP，允许丢包不重传），世界事件、重同步请求和分块 checkpoint 用默认 reliable channel。联机每房最多 5 名真人，禁止 Bot 和断线 Bot 接管。
 
 ### 代码质量工具
 
@@ -54,7 +54,7 @@ pnpm workspace，不引入 Nx/Turborepo 这类重工具（项目规模用不上�
       /game                  # three.js 场景、渲染循环、输入采集、动画
       /ui                     # React 组件：菜单、房间、商店、HUD
       /net
-        signaling.ts           # 连接信令服务器、交换 SDP/ICE
+        signaling.ts           # 连接信令服务器、房间心跳、交换 SDP/ICE
         dataChannel.ts         # 封装 DataChannel 收发、心跳、断线检测
         snapshotInterp.ts      # 快照插值
       /map
@@ -98,9 +98,9 @@ AGENTS.md                    # 本文件
 
 （协议字段的当前定义以 `packages/shared/protocol` 源码为准，本节只描述结构性约定，不重复维护字段级细节，避免和代码本身产生不一致。）
 
-- **输入包**（客户端 → host，高频约 30Hz）：只携带归一化输入方向 + 序号 + 客户端时间戳，不携带任何位置/分数字段——这是硬性规则，位置和分数永远由权威端计算，不接受客户端上报。
-- **状态快照**（host → 所有客户端，约 10Hz）：玩家位置/体积/分数列表 + 本帧被吞噬物体 id 列表 + 当前"活跃物体"（正在被物理模拟、比如倾倒中）的位置与朝向。地图上静止物体不进入快照，客户端本地已知其初始状态。
-- **信令消息**（客户端 ↔ 信令服务，WebSocket，仅用于建连阶段，建连完成后可断开）：创建/加入房间、SDP 交换、ICE candidate 转发。
+- **输入包**（guest → host，高频约 30Hz）：只携带 matchId、归一化输入方向、序号、客户端时间戳和技能意图，不携带任何位置/分数字段——这是硬性规则，位置和分数永远由 host 计算，不接受 guest 上报。
+- **状态增量**（host → guest，约 10Hz）：携带 `snapshotSeq`、`baseWorldRevision/worldRevision`、全部玩家当前状态和本次改变的世界对象。快照序号允许断层；世界 revision 不连续时通过 reliable channel 请求分块 checkpoint。checkpoint 包含全部玩家/道具/临时实体，以及所有偏离地图初始基线的物体；初始状态物体不传。
+- **信令消息**（客户端 ↔ 信令服务，WebSocket）：创建/进入房间、ready、SDP/ICE、固定对局计时和 4 秒 application heartbeat。WSS 在 playing 期间保持连接，但服务端只处理 heartbeat；游戏数据不经后端。
 - **存档协议**（客户端 ↔ 存档 API，HTTPS REST）：客户端本地生成 `{ playerId, secret }` 存 localStorage，所有存档读写请求必须带这对凭证校验；写入是"事件化"（如 `POST /save/coins { delta: +50 }`），不是客户端直接上报最终数值——这能降低但不能杜绝被篡改的风险，见第 8 节。
 
 ## 5. Skills 目录与使用规则
@@ -112,7 +112,7 @@ AGENTS.md                    # 本文件
 - **`threejs-scene`**：场景搭建/资源管理约定——几何体和材质如何复用避免每帧 `new`、glTF 加载与释放、LOD 使用时机、drawcall 合并、禁止在渲染循环里做的操作清单。
 - **`webrtc-protocol`**：DataChannel 建连流程、reliable/unreliable channel 的选用场景、协议字段改动时必须同步修改的位置清单（对应第 3 节的单一真源规则）、host 权威循环的写法约定。
 - **`react-zustand-ui`**：UI 层和 game 层的边界在哪、store 拆分粒度、哪些状态该进 zustand 哪些该是组件内部 state。
-- **`drizzle-sqlite`**：schema 变更流程、migration 写法、存档相关表的事件化写入模式（对应第 4 节）。
+- **`drizzle-postgres`**：schema 变更流程、migration 写法、存档相关表的事件化写入模式（对应第 4 节）。
 - **`map-data-format`**：地图 JSON 结构、预制件引用规则、可吞噬阈值字段的语义，供地图编辑器和程序化生成算法共同遵守。
 
 每个 skill 文件保持精简（几十到一两百行），只写"容易做错的地方"和"这个项目特有的约定"，不要重复写框架官方文档已经讲清楚的通用知识。
@@ -153,11 +153,14 @@ AGENTS.md                    # 本文件
 - 完成任何影响玩法/协议/界面的改动后，同步更新 `SPEC.md`（见第 6 节），这是任务完成的必要条件，不是可选步骤。
 
 ## 其他
+
 ### 开发规范
+
 - 必须使用 pnpm / pnpx 替代 npm / npx
 - 禁止编写任何 js 文件
 
 ### skills
+
 需要预装的 skills:
 
 - react-best-practices

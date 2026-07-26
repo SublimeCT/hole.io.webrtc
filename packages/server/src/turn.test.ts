@@ -1,40 +1,40 @@
-import { describe, it, expect } from "vitest";
 import { createHmac } from "node:crypto";
+import { describe, expect, it } from "vitest";
 import { generateTurnCredentials } from "./turn.js";
 
 const URIS = ["turn:localhost:3478?transport=udp", "turn:localhost:3478?transport=tcp"];
+const SECRET = "test-turn-secret-that-is-at-least-32-chars";
 
 describe("generateTurnCredentials", () => {
   it("builds username as expiry:peerId and carries ttl/uris", () => {
-    const creds = generateTurnCredentials("secret", "peer-1", 3600, URIS, 1_000_000);
+    const credentials = generateTurnCredentials(SECRET, "peer-1", 3600, URIS, 1_000_000);
     const expiry = Math.floor(1_000_000 / 1000) + 3600;
-    expect(creds.username).toBe(`${expiry}:peer-1`);
-    expect(creds.ttl).toBe(3600);
-    expect(creds.uris).toEqual(URIS);
+    expect(credentials.username).toBe(`${expiry}:peer-1`);
+    expect(credentials.ttl).toBe(3600);
+    expect(credentials.uris).toEqual(URIS);
   });
 
-  it("computes credential as base64(hmac-sha1(secret, username)) verifiable by coturn", () => {
-    const creds = generateTurnCredentials("topsecret", "peer-1", 3600, URIS, 1_000_000);
-    const expected = createHmac("sha1", "topsecret").update(creds.username).digest("base64");
-    expect(creds.credential).toBe(expected);
+  it("computes a coturn-compatible base64 HMAC-SHA1 credential", () => {
+    const credentials = generateTurnCredentials(SECRET, "peer-1", 3600, URIS, 1_000_000);
+    const expected = createHmac("sha1", SECRET).update(credentials.username).digest("base64");
+    expect(credentials.credential).toBe(expected);
   });
 
-  it("produces different credentials for different peerIds", () => {
-    const a = generateTurnCredentials("s", "peer-a", 3600, URIS, 1_000_000);
-    const b = generateTurnCredentials("s", "peer-b", 3600, URIS, 1_000_000);
-    expect(a.username).not.toBe(b.username);
-    expect(a.credential).not.toBe(b.credential);
+  it("scopes credentials to the peer and configured secret", () => {
+    const peerA = generateTurnCredentials(SECRET, "peer-a", 3600, URIS, 1_000_000);
+    const peerB = generateTurnCredentials(SECRET, "peer-b", 3600, URIS, 1_000_000);
+    const otherSecret = generateTurnCredentials(`${SECRET}-other`, "peer-a", 3600, URIS, 1_000_000);
+    expect(peerA.username).not.toBe(peerB.username);
+    expect(peerA.credential).not.toBe(peerB.credential);
+    expect(peerA.credential).not.toBe(otherSecret.credential);
   });
 
-  it("produces different credentials for different secrets", () => {
-    const a = generateTurnCredentials("secret-a", "peer-1", 3600, URIS, 1_000_000);
-    const b = generateTurnCredentials("secret-b", "peer-1", 3600, URIS, 1_000_000);
-    expect(a.credential).not.toBe(b.credential);
-  });
-
-  it("advances expiry with ttl", () => {
-    const a = generateTurnCredentials("s", "peer-1", 60, URIS, 0);
-    const b = generateTurnCredentials("s", "peer-1", 120, URIS, 0);
-    expect(Number(b.username.split(":")[0])).toBeGreaterThan(Number(a.username.split(":")[0]));
+  it("rejects weak secrets and malformed TURN service inputs", () => {
+    expect(() => generateTurnCredentials("short", "peer-1", 3600, URIS, 0)).toThrow("at least 32");
+    expect(() => generateTurnCredentials(SECRET, "bad peer", 3600, URIS, 0)).toThrow("peer id");
+    expect(() => generateTurnCredentials(SECRET, "peer-1", 30, URIS, 0)).toThrow("TTL");
+    expect(() => generateTurnCredentials(SECRET, "peer-1", 3600, ["https://turn.test"], 0)).toThrow(
+      "TURN URIs",
+    );
   });
 });

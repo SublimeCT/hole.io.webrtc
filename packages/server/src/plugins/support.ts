@@ -1,40 +1,36 @@
-import fp from "fastify-plugin";
 import cors from "@fastify/cors";
+import rateLimit from "@fastify/rate-limit";
 import websocket from "@fastify/websocket";
-import type { FastifyError, FastifyReply, FastifyRequest } from "fastify";
+import type { FastifyError, FastifyPluginAsync } from "fastify";
+import fp from "fastify-plugin";
+import { MAX_WS_PAYLOAD_BYTES } from "../constants.js";
 import { resolveCorsOrigin } from "../config.js";
 import type { Config } from "../config.js";
-import type { AbuseConfig } from "../config/abuse.js";
 
 export interface SupportOptions {
   config: Config;
-  abuse: AbuseConfig;
 }
 
-/**
- * 全局支撑插件：CORS、WebSocket、统一错误处理。用 fp 打破封装，下游可见。
- */
-export default fp(
-  async (app, opts: SupportOptions) => {
-    await app.register(cors, {
-      origin: resolveCorsOrigin(opts.config.CORS_ORIGIN),
-    });
+const supportPlugin: FastifyPluginAsync<SupportOptions> = async (app, opts) => {
+  await app.register(cors, { origin: resolveCorsOrigin(opts.config.CORS_ORIGIN) });
+  await app.register(rateLimit, { max: 100, timeWindow: "1 minute" });
+  await app.register(websocket, {
+    options: {
+      maxPayload: MAX_WS_PAYLOAD_BYTES,
+      perMessageDeflate: false,
+    },
+  });
 
-    await app.register(websocket, {
-      options: {
-        maxPayload: opts.abuse.MAX_PAYLOAD_BYTES,
-      },
+  app.setErrorHandler((error: FastifyError, request, reply) => {
+    const statusCode = error.statusCode ?? 500;
+    if (statusCode >= 500) request.log.error({ err: error }, "request failed");
+    else request.log.warn({ err: error }, "request rejected");
+    reply.code(statusCode).send({
+      error: statusCode >= 500 ? "Internal Server Error" : error.name,
+      message: statusCode >= 500 ? "internal server error" : error.message,
+      statusCode,
     });
+  });
+};
 
-    app.setErrorHandler((error: FastifyError, request: FastifyRequest, reply: FastifyReply) => {
-      request.log.error({ err: error }, "request error");
-      const statusCode = error.statusCode ?? 500;
-      reply.code(statusCode).send({
-        error: error.name,
-        message: error.message,
-        statusCode,
-      });
-    });
-  },
-  { name: "support" },
-);
+export default fp(supportPlugin, { name: "support" });

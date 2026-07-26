@@ -6,20 +6,29 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "start": "tsx src/server.ts",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
     "@fastify/cors": "^11.0.0",
+    "@fastify/postgres": "^6.1.0",
+    "@fastify/rate-limit": "^11.1.0",
     "@fastify/websocket": "^11.0.0",
     "@hole-io/shared": "workspace:*",
     "@sinclair/typebox": "^0.34.0",
+    "dotenv": "^17.4.2",
+    "drizzle-orm": "^0.45.2",
     "env-schema": "^6.0.0",
     "fastify": "^5.0.0",
-    "fastify-plugin": "^5.0.0"
+    "fastify-plugin": "^5.0.0",
+    "pg": "^8.22.0"
   },
   "devDependencies": {
+    "@types/pg": "^8.20.0",
     "@types/ws": "^8.18.1",
+    "drizzle-kit": "^0.31.10",
     "tsx": "^4.19.0",
     "vitest": "^3.2.4",
     "ws": "^8.21.1"

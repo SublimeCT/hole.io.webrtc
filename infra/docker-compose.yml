@@ -1,18 +1,37 @@
-# TURN 中继 + 反代部署。
-# - coturn：TURN 中继（打洞失败兜底），auth-secret 与信令服务共享 TURN_SECRET。
-#   server 用 generateTurnCredentials(TURN_SECRET, ...) 生成短期凭证，coturn 用同一 secret 校验。
-# - 信令服务（Fastify）本机用 `pnpm --filter @hole-io/server start` 跑（PM2 守护）；
-#   生产容器化时再补 Dockerfile。nginx 做 TLS 终止 + wss 反代到 127.0.0.1:3001。
-# 启动：`cd infra && cp .env.example .env && docker compose up -d coturn`。
 services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: hole-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: holeio
+      POSTGRES_DB: holeio
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in infra/.env}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - hole-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U holeio -d holeio"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   coturn:
     image: coturn/coturn:4.6
     container_name: hole-coturn
     restart: unless-stopped
-    # host 网络避免逐个映射 relay UDP 端口范围（Linux 生产推荐）；
-    # 不支持 host 网络时改用 ports 映射："3478:3478/tcp"、"3478:3478/udp"、"49152-65535:49152-65535/udp"。
     network_mode: host
     volumes:
       - ./coturn/turnserver.conf:/etc/turnserver.conf:ro
-    # secret/realm 由 compose 从 .env 注入（与 server 的 TURN_SECRET 必须一致）
-    command: turnserver -c /etc/turnserver.conf --static-auth-secret ${TURN_SECRET} --realm ${TURN_REALM}
+    command:
+      - turnserver
+      - -c
+      - /etc/turnserver.conf
+      - --static-auth-secret
+      - ${TURN_SECRET:?set TURN_SECRET in infra/.env}
+      - --realm
+      - ${TURN_REALM:-hole.io}
+
+volumes:
+  hole-postgres-data:

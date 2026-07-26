@@ -267,7 +267,7 @@ export function HomePage() {
         await shareGame();
         return;
       case "online":
-        showToast(translate(preferences.language, "onlineToast"));
+        navigate("/online");
         return;
     }
   };

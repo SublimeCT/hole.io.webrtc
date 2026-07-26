@@ -2,6 +2,7 @@ import { lazy, Suspense } from "react";
 import { HashRouter, Navigate, Route, Routes } from "react-router-dom";
 
 import { HomePage } from "../pages/HomePage";
+import { OnlineRoomPage } from "../pages/OnlineRoomPage";
 import { ResultsPage } from "../pages/ResultsPage";
 import { VoidWordmark } from "../ui/VoidWordmark";
 import { translate } from "./i18n";
@@ -14,6 +15,7 @@ export function App() {
     <HashRouter>
       <Routes>
         <Route path="/" element={<HomePage />} />
+        <Route path="/online" element={<OnlineRoomPage />} />
         <Route
           path="/game"
           element={

@@ -1,13 +1,8 @@
 import { createHmac } from "node:crypto";
 import type { TurnCredentials } from "@hole-io/shared/protocol";
 
-/**
- * 生成 coturn auth-secret 短期凭证（与 coturn 的 use-auth-secret + static-auth-secret 配合）。
- * 算法：username = "{expiryEpoch}:{peerId}"，credential = base64(hmac-sha1(secret, username))。
- * coturn 按同一 secret + username 重算 hmac 校验。
- *
- * now（epoch ms）由调用方注入，便于测试。
- */
+const PEER_ID_PATTERN = /^[A-Za-z0-9-]{1,64}$/;
+
 export function generateTurnCredentials(
   secret: string,
   peerId: string,
@@ -15,6 +10,19 @@ export function generateTurnCredentials(
   uris: readonly string[],
   now: number,
 ): TurnCredentials {
+  if (secret.length < 32) throw new Error("TURN secret must contain at least 32 characters");
+  if (!PEER_ID_PATTERN.test(peerId)) throw new Error("invalid TURN peer id");
+  if (!Number.isInteger(ttlSeconds) || ttlSeconds < 60 || ttlSeconds > 86_400) {
+    throw new Error("TURN TTL must be an integer between 60 and 86400 seconds");
+  }
+  if (
+    uris.length === 0 ||
+    uris.some((uri) => (!uri.startsWith("turn:") && !uri.startsWith("turns:")) || uri.length > 2048)
+  ) {
+    throw new Error("TURN URIs must be non-empty turn: or turns: URIs");
+  }
+  if (!Number.isFinite(now) || now < 0) throw new Error("invalid credential timestamp");
+
   const expiry = Math.floor(now / 1000) + ttlSeconds;
   const username = `${expiry}:${peerId}`;
   const credential = createHmac("sha1", secret).update(username).digest("base64");

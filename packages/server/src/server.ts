@@ -1,27 +1,20 @@
 import { buildApp } from "./app.js";
 import { loadConfig } from "./config.js";
-import { loadAbuseConfig } from "./config/abuse.js";
 
-async function start(): Promise<void> {
-  const config = loadConfig();
-  const abuse = loadAbuseConfig();
-  const app = await buildApp({ config, abuse });
+const config = loadConfig();
+const app = await buildApp({ config });
 
-  const shutdown = async (signal: string): Promise<void> => {
-    app.log.info({ signal }, "shutting down");
-    await app.close();
-    process.exit(0);
-  };
-  process.on("SIGTERM", () => void shutdown("SIGTERM"));
-  process.on("SIGINT", () => void shutdown("SIGINT"));
+const shutdown = async (signal: string): Promise<void> => {
+  app.log.info({ signal }, "shutting down");
+  await app.close();
+};
 
-  try {
-    await app.listen({ port: config.PORT, host: config.HOST });
-    app.log.info(`server listening on http://${config.HOST}:${config.PORT}`);
-  } catch (err) {
-    app.log.error({ err }, "listen failed");
-    process.exit(1);
-  }
+process.once("SIGINT", () => void shutdown("SIGINT"));
+process.once("SIGTERM", () => void shutdown("SIGTERM"));
+
+try {
+  await app.listen({ port: config.PORT, host: config.HOST });
+} catch (error: unknown) {
+  app.log.error({ err: error }, "server failed to start");
+  process.exitCode = 1;
 }
-
-void start();

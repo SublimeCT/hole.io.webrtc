@@ -1,0 +1,4 @@
+interface:
+  display_name: "WebRTC Protocol"
+  short_description: "Enforce the project WebRTC room and host-authority protocol"
+  default_prompt: "Use $webrtc-protocol to implement or review multiplayer signaling, room lifecycle, DataChannel synchronization, and TURN integration for this project."

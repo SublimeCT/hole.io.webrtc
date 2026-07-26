@@ -1,310 +1,409 @@
 import { randomUUID } from "node:crypto";
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
+import type { FastifyPluginAsync } from "fastify";
 import type { WebSocket } from "@fastify/websocket";
-import type {
-  ClientToServerMessage,
-  PeerId,
-  RoomErrorCode,
-  ServerToClientMessage,
+import {
+  isClientToServerMessage,
+  normalizePlayerProfile,
+  type ClientToServerMessage,
+  type PeerId,
+  type RoomErrorCode,
+  type ServerToClientMessage,
+  type SignalOutMessage,
 } from "@hole-io/shared/protocol";
-import { resolveCorsOrigin, resolveTurnUris } from "../config.js";
+import {
+  HEARTBEAT_INTERVAL_MS,
+  HEARTBEAT_TIMEOUT_MS,
+  INVALID_MESSAGES_BEFORE_CLOSE,
+  ROOM_SWEEP_INTERVAL_MS,
+  WS_MESSAGES_PER_SECOND,
+} from "../constants.js";
 import type { Config } from "../config.js";
-import type { AbuseConfig } from "../config/abuse.js";
+import { resolveCorsOrigin, resolveCsv } from "../config.js";
+import type { Persistence } from "../db/persistence.js";
+import { RoomService, type RoomEvent, type RoomFailure } from "../room/roomService.js";
 import { generateTurnCredentials } from "../turn.js";
-import { AbuseGuard } from "./abuseGuard.js";
-import { RoomStore, type Room } from "./roomStore.js";
+
+const SOCKET_OPEN = 1;
+const RATE_WINDOW_MS = 1000;
+const MAX_CONNECTIONS = 100;
+const MAX_CONNECTIONS_PER_IP = 5;
+
+interface PeerConnection {
+  peerId: PeerId;
+  socket: WebSocket;
+  ip: string;
+  messageCount: number;
+  windowStartedAt: number;
+  invalidMessages: number;
+  queue: Promise<void>;
+}
 
 export interface SignalingOptions {
   config: Config;
-  abuse: AbuseConfig;
+  persistence: Persistence;
+  now: () => number;
+  sweepIntervalMs?: number;
 }
 
-const HEARTBEAT_INTERVAL_MS = 30_000;
-const RATE_WINDOW_MS = 1000;
-// ws 的 WebSocket.OPEN === 1；用字面量避免对 @fastify/websocket 的值导入（verbatimModuleSyntax 友好）。
-const SOCKET_OPEN = 1;
-
-interface PeerConn {
-  peerId: PeerId;
-  ws: WebSocket;
-  ip: string;
-  alive: boolean;
-  msgCount: number;
-  windowResetAt: number;
+function errorMessage(code: RoomErrorCode): string {
+  switch (code) {
+    case "ROOM_UNAVAILABLE":
+      return "room unavailable";
+    case "ROOM_LIMIT_REACHED":
+      return "room limit reached";
+    case "ALREADY_IN_ROOM":
+      return "already in a room";
+    case "NOT_IN_ROOM":
+      return "not in a room";
+    case "NOT_HOST":
+      return "only the host may perform this action";
+    case "NOT_READY":
+      return "all entered players must be ready";
+    case "INVALID_STATE":
+      return "action is not allowed in the current room state";
+    case "MATCH_IN_PROGRESS":
+      return "only heartbeat messages are accepted while playing";
+    case "SIGNAL_NOT_ALLOWED":
+      return "signal target is not allowed";
+    case "RATE_LIMITED":
+      return "rate limited";
+    case "ACCESS_BLOCKED":
+      return "access blocked";
+    case "INVALID_MESSAGE":
+      return "invalid message";
+    default:
+      return "internal error";
+  }
 }
 
-function isClientMessage(value: unknown): value is ClientToServerMessage {
-  if (typeof value !== "object" || value === null) return false;
-  const type = (value as { type?: unknown }).type;
-  return (
-    type === "create-room" ||
-    type === "join-room" ||
-    type === "start-match" ||
-    type === "close-room" ||
-    type === "signal"
-  );
-}
-
-function joinErrorMsg(code: "ROOM_NOT_FOUND" | "ROOM_FULL"): string {
-  return code === "ROOM_NOT_FOUND" ? "room not found" : "room is full";
-}
-
-function startMatchErrorMsg(code: "NOT_HOST" | "EMPTY" | "ALREADY_STARTED"): string {
-  if (code === "NOT_HOST") return "only host can start";
-  if (code === "EMPTY") return "need at least one guest";
-  return "match already started";
+function roomFailureCode(error: RoomFailure): RoomErrorCode {
+  return error;
 }
 
 const signalingPlugin: FastifyPluginAsync<SignalingOptions> = async (app, opts) => {
-  const { config, abuse } = opts;
-  const guard = new AbuseGuard({
-    maxConnections: abuse.MAX_CONNECTIONS,
-    maxConnectionsPerIp: abuse.MAX_CONNECTIONS_PER_IP,
-  });
-  const store = new RoomStore({
-    maxPeers: abuse.MAX_PEERS_PER_ROOM,
-    roomIdleMs: abuse.ROOM_IDLE_MS,
-    now: () => Date.now(),
-  });
-  const allowedOrigins = resolveCorsOrigin(config.CORS_ORIGIN);
-  const turnUris = resolveTurnUris(config.TURN_URIS);
-  const peers = new Map<PeerId, PeerConn>();
+  const now = opts.now;
+  const roomService = new RoomService(opts.persistence, now);
+  const connections = new Map<PeerId, PeerConnection>();
+  const connectionCountByIp = new Map<string, number>();
+  const allowedOrigins = resolveCorsOrigin(opts.config.CORS_ORIGIN);
+  const turnUris = resolveCsv(opts.config.TURN_URIS);
 
-  const send = (ws: WebSocket, msg: ServerToClientMessage): void => {
-    if (ws.readyState === SOCKET_OPEN) ws.send(JSON.stringify(msg));
+  const send = (socket: WebSocket, message: ServerToClientMessage): void => {
+    if (socket.readyState === SOCKET_OPEN) socket.send(JSON.stringify(message));
   };
 
-  const turnCreds = (peerId: PeerId) =>
+  const sendToPeer = (peerId: PeerId, message: ServerToClientMessage): void => {
+    const connection = connections.get(peerId);
+    if (connection !== undefined) send(connection.socket, message);
+  };
+
+  const sendError = (connection: PeerConnection, code: RoomErrorCode): void => {
+    send(connection.socket, { type: "room-error", code, message: errorMessage(code) });
+  };
+
+  const rejectIpConnections = (ip: string): void => {
+    for (const candidate of connections.values()) {
+      if (candidate.ip !== ip) continue;
+      sendError(candidate, "ACCESS_BLOCKED");
+      candidate.socket.close(1008, "access blocked");
+    }
+  };
+
+  const broadcastState = (room: ReturnType<RoomService["getRoom"]>, exclude?: PeerId): void => {
+    if (room === undefined) return;
+    const message: ServerToClientMessage = { type: "room-state", room: roomService.state(room) };
+    for (const peerId of roomService.recipients(room)) {
+      if (peerId !== exclude) sendToPeer(peerId, message);
+    }
+  };
+
+  const publishEvent = (event: RoomEvent): void => {
+    if (event.type === "room-state") {
+      for (const peerId of event.recipients) {
+        sendToPeer(peerId, { type: "room-state", room: event.room });
+      }
+    } else if (event.type === "room-closed") {
+      for (const peerId of event.recipients) {
+        sendToPeer(peerId, {
+          type: "room-closed",
+          roomCode: event.roomCode,
+          reason: event.reason,
+        });
+      }
+    } else {
+      for (const peerId of event.recipients) {
+        sendToPeer(peerId, {
+          type: "match-ended",
+          matchId: event.matchId,
+          roomCode: event.roomCode,
+          rejoinDeadline: event.rejoinDeadline,
+          reason: "time-limit",
+        });
+      }
+    }
+  };
+
+  const turnCredentials = (peerId: PeerId) =>
     generateTurnCredentials(
-      config.TURN_SECRET,
+      opts.config.TURN_SECRET,
       peerId,
-      config.TURN_TTL_SECONDS,
+      opts.config.TURN_TTL_SECONDS,
       turnUris,
-      Date.now(),
+      now(),
     );
 
-  const broadcast = (room: Room, msg: ServerToClientMessage, exclude?: PeerId): void => {
-    for (const peer of room.peers.values()) {
-      if (exclude !== undefined && peer.peerId === exclude) continue;
-      const conn = peers.get(peer.peerId);
-      if (conn) send(conn.ws, msg);
+  const relaySignal = (connection: PeerConnection, message: SignalOutMessage): void => {
+    const target = roomService.signalTarget(connection.peerId, message.toPeerId);
+    if (!target.ok) {
+      sendError(connection, "SIGNAL_NOT_ALLOWED");
+      return;
+    }
+    const targetConnection = connections.get(target.value.peerId);
+    if (targetConnection === undefined) {
+      sendError(connection, "SIGNAL_NOT_ALLOWED");
+      return;
+    }
+    if (message.type === "signal-offer") {
+      send(targetConnection.socket, {
+        type: "signal-offer",
+        fromPeerId: connection.peerId,
+        description: message.description,
+      });
+    } else if (message.type === "signal-answer") {
+      send(targetConnection.socket, {
+        type: "signal-answer",
+        fromPeerId: connection.peerId,
+        description: message.description,
+      });
+    } else {
+      send(targetConnection.socket, {
+        type: "signal-ice",
+        fromPeerId: connection.peerId,
+        candidate: message.candidate,
+      });
     }
   };
 
-  const closePeerWs = (peerId: PeerId): void => {
-    const conn = peers.get(peerId);
-    if (conn && conn.ws.readyState === SOCKET_OPEN) conn.ws.close();
-  };
-
-  store.setIdleHandler((code) => {
-    const members = store.forceClose(code) ?? [];
-    for (const info of members) {
-      const conn = peers.get(info.peerId);
-      if (conn) send(conn.ws, { type: "room-closed", reason: "idle" });
+  const dispatch = async (
+    connection: PeerConnection,
+    message: ClientToServerMessage,
+  ): Promise<void> => {
+    const currentRoom = roomService.roomForPeer(connection.peerId);
+    if (currentRoom?.status === "playing" && message.type !== "heartbeat") {
+      sendError(connection, "MATCH_IN_PROGRESS");
+      return;
     }
-    for (const info of members) closePeerWs(info.peerId);
-  });
 
-  const heartbeat = setInterval(() => {
-    for (const conn of peers.values()) {
-      if (!conn.alive) {
-        conn.ws.terminate();
-        continue;
-      }
-      conn.alive = false;
-      conn.ws.ping();
-    }
-  }, HEARTBEAT_INTERVAL_MS);
-  app.addHook("onClose", () => clearInterval(heartbeat));
-
-  const checkRate = (conn: PeerConn): boolean => {
-    const now = Date.now();
-    if (now > conn.windowResetAt) {
-      conn.windowResetAt = now + RATE_WINDOW_MS;
-      conn.msgCount = 0;
-    }
-    conn.msgCount += 1;
-    return conn.msgCount <= abuse.SIGNAL_RATE_PER_SOCKET_PER_SECOND;
-  };
-
-  const sendError = (ws: WebSocket, code: RoomErrorCode, message: string): void => {
-    send(ws, { type: "room-error", code, message });
-  };
-
-  const dispatch = (msg: ClientToServerMessage, conn: PeerConn): void => {
-    const { peerId, ws } = conn;
-    switch (msg.type) {
+    switch (message.type) {
       case "create-room": {
-        if (store.roomOfPeer(peerId) !== undefined) {
-          sendError(ws, "INVALID_CODE", "already in a room");
-          break;
+        const profile = normalizePlayerProfile(message.profile);
+        if (profile === null) {
+          sendError(connection, "INVALID_MESSAGE");
+          return;
         }
-        if (store.size >= abuse.MAX_ROOMS) {
-          sendError(ws, "INVALID_CODE", "too many rooms");
-          break;
-        }
-        const room = store.createRoom({ peerId, playerName: msg.playerName });
-        send(ws, {
-          type: "room-created",
-          roomCode: room.code,
-          peerId,
-          turn: turnCreds(peerId),
-        });
-        break;
-      }
-      case "join-room": {
-        if (store.roomOfPeer(peerId) !== undefined) {
-          sendError(ws, "INVALID_CODE", "already in a room");
-          break;
-        }
-        const result = store.joinRoom(msg.roomCode, { peerId, playerName: msg.playerName });
+        const result = await roomService.createRoom(connection.peerId, profile);
         if (!result.ok) {
-          sendError(ws, result.errorCode, joinErrorMsg(result.errorCode));
-          break;
+          sendError(connection, roomFailureCode(result.error));
+          return;
         }
-        send(ws, {
-          type: "room-joined",
-          roomCode: result.room.code,
-          peerId,
-          hostPeerId: result.room.hostPeerId,
-          existingPeers: result.existingPeers,
-          turn: turnCreds(peerId),
+        send(connection.socket, {
+          type: "room-created",
+          room: roomService.state(result.value),
+          turn: turnCredentials(connection.peerId),
         });
-        broadcast(
-          result.room,
-          { type: "peer-joined", peer: { peerId, playerName: msg.playerName, isHost: false } },
-          peerId,
-        );
-        break;
+        return;
       }
-      case "start-match": {
-        const room = store.roomOfPeer(peerId);
-        if (room === undefined) {
-          sendError(ws, "INVALID_CODE", "not in a room");
-          break;
+      case "enter-room": {
+        const profile = normalizePlayerProfile(message.profile);
+        if (profile === null) {
+          sendError(connection, "INVALID_MESSAGE");
+          return;
         }
-        const result = store.startMatch(room.code, peerId);
-        if (!result.ok) sendError(ws, result.errorCode, startMatchErrorMsg(result.errorCode));
-        // 成功不回执：host 已确认 P2P 建立成功，发完即开始 DataChannel 广播；可断 WSS。
-        break;
+        const roomExisted = roomService.getRoom(message.roomCode) !== undefined;
+        const result = roomService.enterRoom(message.roomCode, connection.peerId, profile);
+        if (!result.ok) {
+          if (!roomExisted) {
+            const access = await app.accessService.recordMissingRoom(connection.ip);
+            if (!access.allowed) rejectIpConnections(connection.ip);
+            else sendError(connection, "ROOM_UNAVAILABLE");
+          } else {
+            sendError(connection, "ROOM_UNAVAILABLE");
+          }
+          return;
+        }
+        await app.accessService.recordSuccessfulEntry(connection.ip);
+        send(connection.socket, {
+          type: "room-entered",
+          room: roomService.state(result.value),
+          turn: turnCredentials(connection.peerId),
+        });
+        broadcastState(result.value, connection.peerId);
+        return;
+      }
+      case "set-ready": {
+        const result = roomService.setReady(connection.peerId, message.ready);
+        if (!result.ok) sendError(connection, roomFailureCode(result.error));
+        else broadcastState(result.value);
+        return;
+      }
+      case "begin-connection": {
+        const result = await roomService.beginConnection(connection.peerId);
+        if (!result.ok) {
+          sendError(connection, roomFailureCode(result.error));
+          return;
+        }
+        const event: ServerToClientMessage = {
+          type: "connection-started",
+          room: roomService.state(result.value),
+        };
+        for (const peerId of roomService.recipients(result.value)) sendToPeer(peerId, event);
+        return;
+      }
+      case "signal-offer":
+      case "signal-answer":
+      case "signal-ice":
+        relaySignal(connection, message);
+        return;
+      case "start-match": {
+        const result = await roomService.startMatch(connection.peerId);
+        if (!result.ok) {
+          sendError(connection, roomFailureCode(result.error));
+          return;
+        }
+        const state = roomService.state(result.value.room);
+        const event: ServerToClientMessage = {
+          type: "match-started",
+          matchId: result.value.matchId,
+          matchEndsAt: state.matchEndsAt ?? now(),
+          room: state,
+        };
+        for (const peerId of roomService.recipients(result.value.room)) sendToPeer(peerId, event);
+        return;
+      }
+      case "leave-room": {
+        for (const event of await roomService.leave(connection.peerId)) publishEvent(event);
+        return;
       }
       case "close-room": {
-        const room = store.roomOfPeer(peerId);
-        if (room === undefined) {
-          sendError(ws, "INVALID_CODE", "not in a room");
-          break;
-        }
-        const members = store.closeRoom(room.code, peerId);
-        if (members === null) {
-          sendError(ws, "NOT_HOST", "only host can close");
-          break;
-        }
-        for (const info of members) {
-          if (info.peerId === peerId) continue;
-          const c = peers.get(info.peerId);
-          if (c) send(c.ws, { type: "room-closed", reason: "closed" });
-        }
-        for (const info of members) {
-          if (info.peerId === peerId) continue;
-          closePeerWs(info.peerId);
-        }
-        break;
+        const result = await roomService.closeByHost(connection.peerId);
+        if (!result.ok) sendError(connection, roomFailureCode(result.error));
+        else publishEvent(result.value);
+        return;
       }
-      case "signal": {
-        const room = store.roomOfPeer(peerId);
-        if (room === undefined) {
-          sendError(ws, "INVALID_CODE", "not in a room");
-          break;
-        }
-        const target = room.peers.get(msg.toPeerId);
-        if (target === undefined) {
-          sendError(ws, "INVALID_CODE", "target peer not found");
-          break;
-        }
-        const targetConn = peers.get(target.peerId);
-        if (targetConn) {
-          send(targetConn.ws, {
-            type: "signal",
-            fromPeerId: peerId,
-            kind: msg.kind,
-            payload: msg.payload,
-          });
-        }
-        break;
-      }
+      case "heartbeat":
+        roomService.heartbeat(connection.peerId);
+        send(connection.socket, {
+          type: "heartbeat-ack",
+          clientTime: message.clientTime,
+          serverTime: now(),
+        });
     }
   };
+
+  let sweepInProgress = false;
+  const sweepTimer = setInterval(() => {
+    if (sweepInProgress) return;
+    sweepInProgress = true;
+    void roomService
+      .sweep()
+      .then((events) => events.forEach(publishEvent))
+      .catch((error: unknown) => app.log.error({ err: error }, "room sweep failed"))
+      .finally(() => {
+        sweepInProgress = false;
+      });
+  }, opts.sweepIntervalMs ?? ROOM_SWEEP_INTERVAL_MS);
+  sweepTimer.unref();
+
+  app.addHook("onClose", async () => {
+    clearInterval(sweepTimer);
+    const events = await roomService.shutdown();
+    events.forEach(publishEvent);
+  });
 
   app.get(
     "/ws",
     {
       websocket: true,
-      preValidation: async (request: FastifyRequest, reply: FastifyReply) => {
+      preValidation: async (request, reply) => {
         if (allowedOrigins !== true) {
           const origin = request.headers.origin;
           if (typeof origin !== "string" || !allowedOrigins.includes(origin)) {
-            reply.code(403).send({ error: "forbidden origin" });
+            await reply.code(403).send({ error: "forbidden origin", statusCode: 403 });
             return;
           }
         }
-        const result = guard.acquire(request.ip);
-        if (!result.ok) {
-          reply.code(429).send({ error: "rate limited", reason: result.reason });
+        const ipConnections = connectionCountByIp.get(request.ip) ?? 0;
+        if (connections.size >= MAX_CONNECTIONS || ipConnections >= MAX_CONNECTIONS_PER_IP) {
+          await reply.code(429).send({ error: "too many connections", statusCode: 429 });
         }
       },
     },
     (socket, request) => {
-      const peerId: PeerId = randomUUID();
-      const conn: PeerConn = {
+      const peerId = randomUUID() as PeerId;
+      const connection: PeerConnection = {
         peerId,
-        ws: socket,
+        socket,
         ip: request.ip,
-        alive: true,
-        msgCount: 0,
-        windowResetAt: Date.now() + RATE_WINDOW_MS,
+        messageCount: 0,
+        windowStartedAt: now(),
+        invalidMessages: 0,
+        queue: Promise.resolve(),
       };
-      peers.set(peerId, conn);
-
-      socket.on("pong", () => {
-        conn.alive = true;
+      connections.set(peerId, connection);
+      connectionCountByIp.set(connection.ip, (connectionCountByIp.get(connection.ip) ?? 0) + 1);
+      send(socket, {
+        type: "connected",
+        peerId,
+        heartbeatIntervalMs: HEARTBEAT_INTERVAL_MS,
+        heartbeatTimeoutMs: HEARTBEAT_TIMEOUT_MS,
       });
 
-      socket.on("message", (raw: { toString(): string }) => {
-        if (!checkRate(conn)) {
-          sendError(socket, "INVALID_CODE", "rate limited");
-          return;
-        }
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(raw.toString());
-        } catch {
-          sendError(socket, "INVALID_CODE", "invalid json");
-          return;
-        }
-        if (!isClientMessage(parsed)) {
-          sendError(socket, "INVALID_CODE", "unknown message");
-          return;
-        }
-        dispatch(parsed, conn);
+      socket.on("message", (raw) => {
+        connection.queue = connection.queue
+          .then(async () => {
+            const currentTime = now();
+            if (currentTime - connection.windowStartedAt >= RATE_WINDOW_MS) {
+              connection.windowStartedAt = currentTime;
+              connection.messageCount = 0;
+            }
+            connection.messageCount += 1;
+            if (connection.messageCount > WS_MESSAGES_PER_SECOND) {
+              sendError(connection, "RATE_LIMITED");
+              return;
+            }
+
+            let parsed: unknown;
+            try {
+              parsed = JSON.parse(raw.toString());
+            } catch {
+              parsed = null;
+            }
+            if (!isClientToServerMessage(parsed)) {
+              connection.invalidMessages += 1;
+              sendError(connection, "INVALID_MESSAGE");
+              if (connection.invalidMessages >= INVALID_MESSAGES_BEFORE_CLOSE) {
+                socket.close(1008, "invalid protocol messages");
+              }
+              return;
+            }
+            await dispatch(connection, parsed);
+          })
+          .catch((error: unknown) => {
+            app.log.error({ err: error, peerId }, "websocket dispatch failed");
+            sendError(connection, "INTERNAL_ERROR");
+          });
+      });
+
+      socket.on("error", (error) => {
+        app.log.warn({ err: error, peerId }, "websocket error");
       });
 
       socket.on("close", () => {
-        peers.delete(peerId);
-        guard.release(conn.ip);
-        const detach = store.detachPeer(peerId);
-        if (detach.outcome === "guest-left") {
-          for (const info of detach.remaining) {
-            const c = peers.get(info.peerId);
-            if (c) send(c.ws, { type: "peer-left", peerId });
-          }
-        } else if (detach.outcome === "host-left-lobby") {
-          for (const info of detach.remaining) {
-            const c = peers.get(info.peerId);
-            if (c) send(c.ws, { type: "room-closed", reason: "host-left" });
-          }
-          for (const info of detach.remaining) closePeerWs(info.peerId);
-        }
-        // host-left-playing / no-op：无需处理
+        connections.delete(peerId);
+        const count = (connectionCountByIp.get(connection.ip) ?? 1) - 1;
+        if (count <= 0) connectionCountByIp.delete(connection.ip);
+        else connectionCountByIp.set(connection.ip, count);
+        // 不立即修改房间；由 8 秒 application heartbeat 超时统一裁决 host/guest 掉线。
       });
     },
   );
