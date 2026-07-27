@@ -4,14 +4,12 @@ import {
   CITY_BLOCK_ROWS,
   CITY_BLOCK_SIZE,
   CITY_CHARACTER_COUNT,
-  CITY_MOVING_CHARACTER_COUNT,
   CITY_SMALL_OBJECT_COUNTS,
   CITY_VEHICLE_COUNT,
   GAME_DURATION_SECONDS,
   INITIAL_HOLE_RADIUS,
   MAP_HALF_HEIGHT,
   MAP_HALF_WIDTH,
-  PEDESTRIAN_SPEED,
   ROAD_X_CENTERS,
   ROAD_Y_CENTERS,
   ROAD_WIDTH,
@@ -858,8 +856,6 @@ function buildCityObjects(): readonly WorldObjectState[] {
   }
 
   let characterIndex = 0;
-  let movingPedestrianIndex = 0;
-  let sidewalkSegmentIndex = 0;
   const nextCharacter = (): string => {
     const suffix = String.fromCharCode(97 + (characterIndex % 8));
     characterIndex += 1;
@@ -873,21 +869,10 @@ function buildCityObjects(): readonly WorldObjectState[] {
     intervalIndex: number,
   ): void => {
     const count = 5;
-    const movingIndex = movingPedestrianIndex < CITY_MOVING_CHARACTER_COUNT ? 0 : -1;
-    const movingSide: -1 | 1 = sidewalkSegmentIndex % 2 === 0 ? -1 : 1;
     const minimum = interval.minimum + 1.2;
     const maximum = interval.maximum - 1.2;
     for (let personIndex = 0; personIndex < count; personIndex += 1) {
-      const side: -1 | 1 =
-        movingIndex >= 0
-          ? personIndex === movingIndex
-            ? movingSide
-            : movingSide === -1
-              ? 1
-              : -1
-          : (personIndex + roadIndex + intervalIndex) % 2 === 0
-            ? -1
-            : 1;
+      const side: -1 | 1 = (personIndex + roadIndex + intervalIndex) % 2 === 0 ? -1 : 1;
       const direction: -1 | 1 = (roadIndex + intervalIndex + side) % 2 === 0 ? 1 : -1;
       const fixed = roadCenter + side * SIDEWALK_CENTER_OFFSET;
       const yaw =
@@ -895,24 +880,8 @@ function buildCityObjects(): readonly WorldObjectState[] {
       const progress = (personIndex + 0.5) / count;
       const along = minimum + (maximum - minimum) * progress;
       const position = axis === "y" ? { x: fixed, y: along } : { x: along, y: fixed };
-      const motion =
-        personIndex === movingIndex
-          ? route(
-              "pedestrian",
-              `${axis}-walk-${roadIndex}-${intervalIndex}-${side}`,
-              axis,
-              direction,
-              PEDESTRIAN_SPEED,
-              fixed,
-              yaw,
-              minimum,
-              maximum,
-            )
-          : null;
-      add(nextCharacter(), position, yaw, motion);
-      if (motion) movingPedestrianIndex += 1;
+      add(nextCharacter(), position, yaw);
     }
-    sidewalkSegmentIndex += 1;
   };
 
   ROAD_X_CENTERS.forEach((roadCenter, roadIndex) => {
@@ -925,13 +894,8 @@ function buildCityObjects(): readonly WorldObjectState[] {
       addSidewalkCharacters("x", roadCenter, roadIndex, interval, intervalIndex);
     });
   });
-  if (
-    characterIndex !== CITY_CHARACTER_COUNT ||
-    movingPedestrianIndex !== CITY_MOVING_CHARACTER_COUNT
-  ) {
-    throw new Error(
-      `Expected ${CITY_CHARACTER_COUNT} characters/${CITY_MOVING_CHARACTER_COUNT} moving, received ${characterIndex}/${movingPedestrianIndex}`,
-    );
+  if (characterIndex !== CITY_CHARACTER_COUNT) {
+    throw new Error(`Expected ${CITY_CHARACTER_COUNT} characters, received ${characterIndex}`);
   }
 
   if (objects.length !== SCENE_OBJECT_COUNT) {

@@ -6,6 +6,12 @@ const base = process.env.GITHUB_ACTIONS && repositoryName ? `/${repositoryName}/
 export default defineConfig({
   base,
   publicDir: "../../assets",
+  server: {
+    host: true,
+  },
+  preview: {
+    host: true,
+  },
   build: {
     rollupOptions: {
       output: {

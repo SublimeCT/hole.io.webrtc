@@ -36,12 +36,16 @@ pnpm dev
 
 开发服务器启动后，打开终端输出的本地地址。`pnpm dev` 只启动客户端，不会启动后端；停止开发时结束对应终端中的进程。
 
+局域网联调时分别运行 `pnpm dev` 和 `pnpm dev:server`。两者都会监听全部网络接口；客户端会自动以当前页面的局域网 IP 连接 `ws://<当前主机>:3001/ws`。构建后的客户端可通过 `pnpm preview` 在局域网预览。局域网开发的信令服务临时接受任意 origin，生产环境必须在 `packages/server/.env` 中明确设置 `CORS_ORIGIN`。
+
 ### 常用命令
 
 ```bash
 pnpm test                 # 运行全部测试
 pnpm --filter @hole-io/shared test
 pnpm build                # 构建客户端
+pnpm preview              # 以局域网可访问方式预览构建产物
+pnpm dev:server           # 启动局域网可访问的开发信令服务
 pnpm typecheck            # 检查所有 workspace 包
 pnpm lint                 # oxlint
 pnpm format               # oxfmt 格式化

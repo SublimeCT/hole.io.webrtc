@@ -10,7 +10,7 @@ export const SCENE_OBJECT_COUNT = 695;
 export const CITY_BUILDING_COUNT = 157;
 export const CITY_VEHICLE_COUNT = 44;
 export const CITY_CHARACTER_COUNT = 155;
-export const CITY_MOVING_CHARACTER_COUNT = 11;
+export const CITY_MOVING_CHARACTER_COUNT = 0;
 export const CITY_SMALL_OBJECT_COUNTS = {
   4: 150,
   12: 142,

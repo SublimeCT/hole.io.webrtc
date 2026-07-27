@@ -22,7 +22,6 @@ import {
   MAP_HALF_WIDTH,
   MAP_HEIGHT,
   MAP_WIDTH,
-  PEDESTRIAN_SPEED,
   RADIUS_BOOST_COOLDOWN_SECONDS,
   RADIUS_BOOST_DURATION_SECONDS,
   ROAD_X_CENTERS,
@@ -305,6 +304,24 @@ describe("abilities", () => {
     expect(afterOneSecond?.bombCooldown).toBeLessThan(BOMB_COOLDOWN_SECONDS);
   });
 
+  it("starts the radius cooldown in the same authoritative step as activation", () => {
+    const initial = createInitialSimulation();
+    const player = initial.holes.find((hole) => hole.id === "player");
+    if (!player) {
+      throw new Error("Player is required");
+    }
+
+    const result = stepSimulation(
+      { ...initial, holes: [player], objects: [] },
+      [{ playerId: player.id, direction: { x: 0, y: 0 }, abilities: ["radius"] }],
+      1 / 60,
+    );
+    const activatedPlayer = result.state.holes[0];
+
+    expect(activatedPlayer?.radiusBoostRemaining).toBe(RADIUS_BOOST_DURATION_SECONDS);
+    expect(activatedPlayer?.radiusBoostCooldown).toBe(RADIUS_BOOST_COOLDOWN_SECONDS);
+  });
+
   it("promotes the radius ability to the next permanent growth level", () => {
     const initial = createInitialSimulation();
     const player = initial.holes.find((hole) => hole.id === "player");
@@ -574,16 +591,12 @@ describe("world defaults", () => {
     expect(BASE_MOVE_SPEED).toBeGreaterThan(VEHICLE_SPEED);
   });
 
-  it("moves traffic and selected pedestrians only along their authoritative routes", () => {
+  it("moves traffic while every character remains static", () => {
     const initial = createInitialSimulation();
     const vehicle = initial.objects.find((object) => object.motion?.speed === VEHICLE_SPEED);
-    const pedestrian = initial.objects.find(
-      (object) =>
-        object.motion?.speed === PEDESTRIAN_SPEED &&
-        Math.abs(object.position[object.motion.axis]) < 150,
-    );
-    if (!vehicle || !vehicle.motion || !pedestrian || !pedestrian.motion) {
-      throw new Error("Moving vehicle and pedestrian are required");
+    const pedestrian = initial.objects.find((object) => object.prefabId.startsWith("character-"));
+    if (!vehicle || !vehicle.motion || !pedestrian) {
+      throw new Error("Vehicle and character are required");
     }
     const result = stepSimulation(
       { ...initial, holes: [], objects: [vehicle, pedestrian] },
@@ -599,10 +612,8 @@ describe("world defaults", () => {
     expect(movedVehicle.position[vehicle.motion.axis]).toBeCloseTo(
       vehicle.position[vehicle.motion.axis] + vehicle.motion.direction * VEHICLE_SPEED * 0.1,
     );
-    expect(movedPedestrian.position[pedestrian.motion.axis]).toBeCloseTo(
-      pedestrian.position[pedestrian.motion.axis] +
-        pedestrian.motion.direction * PEDESTRIAN_SPEED * 0.1,
-    );
+    expect(movedPedestrian.position).toEqual(pedestrian.position);
+    expect(movedPedestrian.motion).toBeNull();
   });
 
   it("keeps queued vehicles separated by their physical lengths", () => {
@@ -844,9 +855,6 @@ describe("world defaults", () => {
     expect(initial.objects.filter((object) => object.motion?.speed === VEHICLE_SPEED)).toHaveLength(
       CITY_VEHICLE_COUNT,
     );
-    expect(
-      initial.objects.filter((object) => object.motion?.speed === PEDESTRIAN_SPEED),
-    ).toHaveLength(CITY_MOVING_CHARACTER_COUNT);
     expect(initial.objects.filter((object) => object.motion?.kind === "vehicle")).toHaveLength(
       CITY_VEHICLE_COUNT,
     );
@@ -959,34 +967,42 @@ describe("world defaults", () => {
     }
   }, 20_000);
 
-  it("returns a non-consumed routed object to its original lane and heading", () => {
+  it("keeps a vehicle moving when a footprint strikes it", () => {
     const initial = createInitialSimulation();
-    const vehicle = initial.objects.find(
-      (object) =>
-        object.motion?.kind === "vehicle" &&
-        object.motion.axis === "y" &&
-        object.motion.direction === 1,
+    const vehicle = initial.objects.find((object) => object.motion?.kind === "vehicle");
+    const player = initial.holes[0];
+    if (!vehicle || !vehicle.motion || !player) {
+      throw new Error("Vehicle and player are required");
+    }
+    const result = stepSimulation(
+      {
+        ...initial,
+        holes: [player],
+        objects: [vehicle],
+        footprints: [
+          {
+            id: "impact",
+            ownerId: player.id,
+            position: { ...vehicle.position },
+            width: vehicle.fitDiameter * 3,
+            length: vehicle.fitDiameter * 3,
+            rotation: 0,
+            impactRemaining: 0.01,
+            fadeRemaining: 0,
+          },
+        ],
+      },
+      [],
+      0.02,
     );
-    if (!vehicle || !vehicle.motion) {
-      throw new Error("Vertical vehicle route is required");
+    const movedVehicle = result.state.objects[0];
+    if (!movedVehicle || !movedVehicle.motion) {
+      throw new Error("Vehicle route must remain active");
     }
-    let state: SimulationState = {
-      ...initial,
-      holes: [],
-      objects: [{ ...vehicle, status: "active", motion: null, claimedBy: "player" }],
-    };
-    for (let frame = 0; frame < 180; frame += 1) {
-      state = stepSimulation(state, [], 1 / 60).state;
-    }
-    const resumed = state.objects[0];
-    if (!resumed || !resumed.motion) {
-      throw new Error("Vehicle route was not restored");
-    }
-    expect(resumed.status).toBe("static");
-    expect(resumed.position.x).toBeCloseTo(resumed.motion.lateralCoordinate);
-    expect(yawFromRotation(resumed)).toBeCloseTo(resumed.motion.headingYaw);
-    const afterRouteStep = stepSimulation(state, [], 0.1).state.objects[0];
-    expect(afterRouteStep?.position.y).toBeGreaterThan(resumed.position.y);
+    expect(movedVehicle.status).toBe("static");
+    expect(movedVehicle.position[movedVehicle.motion.axis]).not.toBeCloseTo(
+      vehicle.position[vehicle.motion.axis],
+    );
   });
 
   it("keeps vehicle lanes collision-free for a full signal cycle and does not halt for a distant hole", () => {
@@ -1048,7 +1064,7 @@ describe("world defaults", () => {
     );
   });
 
-  it("activates a fully covered route vehicle for the physical fall", () => {
+  it("directly consumes a fully covered route vehicle without physics activation", () => {
     const initial = createInitialSimulation();
     const vehicle = initial.objects.find((object) => object.motion?.kind === "vehicle");
     const player = initial.holes[0];
@@ -1058,16 +1074,20 @@ describe("world defaults", () => {
     const result = stepSimulation(
       {
         ...initial,
-        holes: [{ ...player, radius: 4, position: { ...vehicle.position } }],
+        holes: [{ ...player, radius: vehicle.fitDiameter * 2, position: { ...vehicle.position } }],
         objects: [vehicle],
       },
       [],
       0.1,
     );
-    expect(result.state.objects[0]?.status).toBe("active");
+    expect(result.state.objects[0]?.status).toBe("consumed");
+    expect(result.state.objects[0]?.footprintFadeRemaining).toBe(0);
+    expect(result.state.objects[0]?.sizeMultiplier).toBe(vehicle.sizeMultiplier);
+    expect(result.state.holes[0]?.score).toBe(player.score + vehicle.value);
+    expect(result.events.filter((event) => event.type === "consumed")).toHaveLength(1);
   });
 
-  it("activates every vehicle prefab when a hole fully covers it", () => {
+  it("directly consumes every vehicle prefab when a hole fully covers it", () => {
     const initial = createInitialSimulation();
     const player = initial.holes[0];
     if (!player) {
@@ -1086,13 +1106,15 @@ describe("world defaults", () => {
       const result = stepSimulation(
         {
           ...initial,
-          holes: [{ ...player, radius: 4, position: { ...vehicle.position } }],
+          holes: [
+            { ...player, radius: vehicle.fitDiameter * 2, position: { ...vehicle.position } },
+          ],
           objects: [vehicle],
         },
         [],
         1 / 60,
       );
-      expect(result.state.objects[0]?.status).toBe("active");
+      expect(result.state.objects[0]?.status).toBe("consumed");
     });
   });
 

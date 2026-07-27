@@ -33,6 +33,7 @@ import {
   type WorldEvent,
 } from "@hole-io/shared/protocol";
 import * as THREE from "three";
+import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 
 import type { MatchResult } from "../app/matchResult";
 import { translate } from "../app/i18n";
@@ -44,10 +45,14 @@ import { InputController } from "./InputController";
 import { PowerUpRenderer } from "./PowerUpRenderer";
 
 const FIXED_STEP_SECONDS = 1 / 60;
+/** 单帧最多追赶的模拟步数上限。卡顿（GC/标签页切换/上下文丢失恢复）后只补有限步、丢弃其余积压，
+ *  避免"一步慢→多步补→更慢"的螺旋卡死；正常 60Hz 帧只跑 1 步，行为无变化。 */
+const MAX_STEPS_PER_FRAME = 5;
 /** host 广播增量快照的目标频率（30Hz），#frame 内累加时间触发。 */
 const SNAPSHOT_INTERVAL_SECONDS = 1 / 30;
 /** guest 模式把本地输入上报给 host 的目标频率（~30Hz）。 */
 const INPUT_SEND_INTERVAL_SECONDS = 1 / 30;
+const MAX_RENDER_PIXEL_RATIO = 1.5;
 
 export type GameMode = "offline" | "host" | "guest";
 
@@ -139,6 +144,9 @@ export class Game {
   readonly #geometries = new Set<THREE.BufferGeometry>();
   readonly #materials = new Set<THREE.Material>();
   readonly #textures = new Set<THREE.Texture>();
+  /** 同材质地面片先收集到这里，#buildScene 结束时合并成单 draw call。 */
+  readonly #groundGeometriesByMaterial = new Map<THREE.Material, THREE.BufferGeometry[]>();
+  readonly #groundBake = new THREE.Matrix4();
   readonly #cameraTarget = new THREE.Vector3();
   readonly #cameraDesired = new THREE.Vector3();
   readonly #cameraOffset = new THREE.Vector3(0, 20, 15);
@@ -175,7 +183,13 @@ export class Game {
   #matchStarted = false;
   #pageVisible = document.visibilityState !== "hidden";
   #sceneDirty = true;
-  readonly #mobileGraphics: boolean;
+  /** 当前领先者 hole id（12.5Hz HUD 内更新），渲染帧直接读，避免每帧重排 holes。 */
+  #leaderId: string | undefined;
+  #resizePending = false;
+  /** 画布视口尺寸缓存（resize 时刷新）。DOM 叠层/浮字定位只读它，
+   *  避免在吞噬等热路径里读 clientWidth/getBoundingClientRect 触发强制布局。 */
+  #viewportWidth = 0;
+  #viewportHeight = 0;
   readonly #preferences: GamePreferences;
   readonly #onMatchEnd: (result: MatchResult) => void;
   readonly #onPoopHit: (playerCount: number) => void;
@@ -200,10 +214,9 @@ export class Game {
     this.#onBroadcastSnapshot = config.onBroadcastSnapshot;
     this.#onWorldEvents = config.onWorldEvents;
     this.#onSendLocalInput = config.onSendLocalInput;
-    this.#mobileGraphics = window.matchMedia("(pointer: coarse)").matches;
     this.#renderer = new THREE.WebGLRenderer({
       canvas,
-      antialias: !this.#mobileGraphics,
+      antialias: true,
       powerPreference: "high-performance",
       stencil: true,
     });
@@ -221,7 +234,7 @@ export class Game {
     this.#powerUpRenderer = new PowerUpRenderer(this.#scene, ui.powerUpLayer);
     this.#buildScene();
     this.#holeRenderer.build(config.initialState.holes);
-    this.#resize();
+    this.#applyResize();
     this.#syncScene(1);
     this.#updateHud();
     window.addEventListener("resize", this.#resize);
@@ -339,9 +352,19 @@ export class Game {
         }
       }
     } else {
-      while (this.#matchStarted && this.#accumulator >= FIXED_STEP_SECONDS) {
+      let stepsThisFrame = 0;
+      while (
+        this.#matchStarted &&
+        this.#accumulator >= FIXED_STEP_SECONDS &&
+        stepsThisFrame < MAX_STEPS_PER_FRAME
+      ) {
         this.#stepAuthoritative();
         this.#accumulator -= FIXED_STEP_SECONDS;
+        stepsThisFrame += 1;
+      }
+      // 超过单帧上限的积压直接丢弃，防止卡顿后螺旋追赶。
+      if (this.#accumulator > FIXED_STEP_SECONDS) {
+        this.#accumulator = 0;
       }
       if (!this.#matchStarted) {
         this.#accumulator = 0;
@@ -513,6 +536,7 @@ export class Game {
       this.#addVerticalRoadSegments(center, ROAD_WIDTH, asphalt, 0.05);
     }
     this.#addRoadMarkings(lane);
+    this.#flushGroundMeshes();
 
     this.#camera.position.copy(this.#cameraOffset);
     this.#camera.lookAt(0, 0, 0);
@@ -541,12 +565,32 @@ export class Game {
     material: THREE.Material,
   ): void {
     const geometry = new THREE.PlaneGeometry(width, depth);
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.rotation.x = -Math.PI / 2;
-    mesh.position.set(x, y, z);
-    mesh.renderOrder = -11;
-    this.#geometries.add(geometry);
-    this.#scene.add(mesh);
+    // 把"躺平旋转 + 位移"烘焙进顶点，使同材质地面能在 #flushGroundMeshes 合并为单 draw call。
+    this.#groundBake.makeRotationX(-Math.PI / 2);
+    this.#groundBake.setPosition(x, y, z);
+    geometry.applyMatrix4(this.#groundBake);
+    const list = this.#groundGeometriesByMaterial.get(material);
+    if (list === undefined) {
+      this.#groundGeometriesByMaterial.set(material, [geometry]);
+    } else {
+      list.push(geometry);
+    }
+  }
+
+  /** 把按材质收集的地面片合并为每材质一个 Mesh，~50 个 draw call → 3 个。 */
+  #flushGroundMeshes(): void {
+    for (const [material, geometries] of this.#groundGeometriesByMaterial) {
+      const merged = mergeGeometries(geometries, false);
+      geometries.forEach((geometry) => geometry.dispose());
+      if (merged === null) {
+        continue;
+      }
+      const mesh = new THREE.Mesh(merged, material);
+      mesh.renderOrder = -11;
+      this.#geometries.add(merged);
+      this.#scene.add(mesh);
+    }
+    this.#groundGeometriesByMaterial.clear();
   }
 
   #addVerticalRoadSegments(
@@ -630,15 +674,7 @@ export class Game {
   }
 
   #syncScene(deltaSeconds: number): void {
-    const leader = [...this.#state.holes]
-      .filter((hole) => !hole.isOut && hole.eliminationRemaining <= 0)
-      .sort((left, right) => {
-        if (right.score !== left.score) {
-          return right.score - left.score;
-        }
-        return left.kind === "human" ? -1 : 1;
-      })[0];
-    this.#holeRenderer.sync(this.#state.holes, this.#state.elapsed, deltaSeconds, leader?.id);
+    this.#holeRenderer.sync(this.#state.holes, this.#state.elapsed, deltaSeconds, this.#leaderId);
 
     const player = this.#state.holes.find((hole) => hole.id === this.#localPlayerId);
     if (!player) {
@@ -675,18 +711,19 @@ export class Game {
       this.#state.poopHazards,
       this.#state.holes,
       this.#camera,
-      this.#canvas.clientWidth,
-      this.#canvas.clientHeight,
+      this.#viewportWidth,
+      this.#viewportHeight,
     );
     this.#updateOpponentIndicators(player);
   }
 
   #updateOpponentIndicators(player: HoleState): void {
-    const opponents = this.#state.holes.filter(
-      (hole) => hole.id !== this.#localPlayerId && hole.kind === "human",
-    );
-    const width = this.#canvas.clientWidth;
-    const height = this.#canvas.clientHeight;
+    // 同时覆盖单机（对手是 bot）与联机（对手是真人）：联机不生成 bot、单机无其他真人，
+    // 故只按 id 排除本地玩家即可；出局/淘汰的由下方 per-slot hidden 处理。
+    // 历史上这里曾是 kind === "bot"，后被改成 kind === "human" 导致单机方向标记全部消失。
+    const opponents = this.#state.holes.filter((hole) => hole.id !== this.#localPlayerId);
+    const width = this.#viewportWidth;
+    const height = this.#viewportHeight;
     const centerX = width / 2;
     const centerY = height / 2;
     const horizontalInset = 76;
@@ -772,6 +809,9 @@ export class Game {
       return left.id.localeCompare(right.id);
     });
     this.#writeRankingRows(this.#ui.rankingRows, rankableHoles);
+    // 领先皇冠：复用上面的排序结果（分数降序、人类优先），取首个未出局者。
+    const leader = rankableHoles.find((hole) => !hole.isOut && hole.eliminationRemaining <= 0);
+    this.#leaderId = leader?.id;
   }
 
   #updateAbilityHud(player: HoleState): void {
@@ -813,7 +853,8 @@ export class Game {
       const locked = active > 0 || cooldown > 0;
       button.root.disabled = locked;
       button.root.classList.toggle("is-active", active > 0);
-      button.root.classList.toggle("is-cooldown", locked && active <= 0);
+      // 冷却从权威发动步开始；E 的激活窗口不能遮住已经开始的冷却计时。
+      button.root.classList.toggle("is-cooldown", cooldown > 0);
       const progress = cooldown / maxCooldown;
       button.root.style.setProperty("--ability-progress", `${Math.max(0, Math.min(1, progress))}`);
       button.cooldown.textContent = cooldown > 0 ? `${Math.ceil(cooldown)}s` : "";
@@ -892,12 +933,13 @@ export class Game {
     this.#playerSwallowCount += 1;
     this.#feedback.swallow();
     this.#scoreWorldPosition.set(event.position.x, 0.5, event.position.y).project(this.#camera);
-    const rect = this.#canvas.getBoundingClientRect();
     const popup = document.createElement("span");
     popup.className = `score-pop${event.type === "player-defeated" ? " is-kill" : ""}`;
     popup.textContent = `+${event.value}`;
-    popup.style.left = `${((this.#scoreWorldPosition.x + 1) / 2) * rect.width}px`;
-    popup.style.top = `${((-this.#scoreWorldPosition.y + 1) / 2) * rect.height}px`;
+    // 容器是全屏 position:fixed，NDC→screen 用缓存的视口尺寸换算；
+    // 不在吞噬热路径里读 clientWidth/getBoundingClientRect，否则连续 appendChild+读尺寸会触发强制布局（reflow）。
+    popup.style.left = `${((this.#scoreWorldPosition.x + 1) / 2) * this.#viewportWidth}px`;
+    popup.style.top = `${((-this.#scoreWorldPosition.y + 1) / 2) * this.#viewportHeight}px`;
     popup.addEventListener("animationend", () => popup.remove(), { once: true });
     this.#ui.scoreEffects.appendChild(popup);
   }
@@ -1006,15 +1048,29 @@ export class Game {
   };
 
   readonly #resize = (): void => {
+    // 移动端浏览器 UI 显隐 / 下拉会连续抛 resize，合并到下一帧只重建一次 drawingbuffer。
+    if (this.#resizePending) {
+      return;
+    }
+    this.#resizePending = true;
+    requestAnimationFrame(() => {
+      this.#resizePending = false;
+      this.#applyResize();
+    });
+  };
+
+  #applyResize(): void {
     const width = this.#canvas.clientWidth;
     const height = this.#canvas.clientHeight;
+    this.#viewportWidth = width;
+    this.#viewportHeight = height;
     this.#camera.aspect = width / Math.max(height, 1);
     this.#camera.updateProjectionMatrix();
     this.#renderer.setSize(width, height, false);
     this.#renderer.setPixelRatio(this.#getPixelRatio());
-  };
+  }
 
   #getPixelRatio(): number {
-    return this.#mobileGraphics ? 1 : Math.min(window.devicePixelRatio, 1.25);
+    return Math.min(window.devicePixelRatio, MAX_RENDER_PIXEL_RATIO);
   }
 }

@@ -163,6 +163,28 @@ function createGroundWedge(innerRadius: number, startAngle: number, endAngle: nu
   };
 }
 
+/**
+ * 楔形几何只依赖 hole.radius（分段角度由 HOLE_SEGMENTS 决定，是常量）。radius 是分段常量
+ * （仅升级/范围增益时变），所以按 radius 缓存 96 段楔形，跨步、跨洞复用，避免每步每段
+ * 重建 ConvexPolyhedron + orientFaceOutward（profiler 实测是模拟最大单点开销）。
+ * key 用原始 radius（不量化）以保持与原实现逐位一致的碰撞形状。
+ */
+const groundWedgeCache = new Map<number, GroundWedge[]>();
+
+function groundWedgesFor(radius: number): GroundWedge[] {
+  let wedges = groundWedgeCache.get(radius);
+  if (wedges === undefined) {
+    wedges = [];
+    for (let segment = 0; segment < HOLE_SEGMENTS; segment += 1) {
+      const startAngle = (segment / HOLE_SEGMENTS) * Math.PI * 2;
+      const endAngle = ((segment + 1) / HOLE_SEGMENTS) * Math.PI * 2;
+      wedges.push(createGroundWedge(radius, startAngle, endAngle));
+    }
+    groundWedgeCache.set(radius, wedges);
+  }
+  return wedges;
+}
+
 function createGroundBody(hole: HoleState | null): Body {
   if (!hole) {
     const ground = new Body({
@@ -181,10 +203,7 @@ function createGroundBody(hole: HoleState | null): Body {
     collisionFilterGroup: GROUND_GROUP,
     collisionFilterMask: ACTIVE_GROUP,
   });
-  for (let segment = 0; segment < HOLE_SEGMENTS; segment += 1) {
-    const startAngle = (segment / HOLE_SEGMENTS) * Math.PI * 2;
-    const endAngle = ((segment + 1) / HOLE_SEGMENTS) * Math.PI * 2;
-    const wedge = createGroundWedge(hole.radius, startAngle, endAngle);
+  for (const wedge of groundWedgesFor(hole.radius)) {
     ground.addShape(wedge.shape, wedge.offset);
   }
   return ground;

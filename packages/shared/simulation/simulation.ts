@@ -17,9 +17,6 @@ import {
   MAGNET_DURATION_SECONDS,
   POOP_DURATION_SECONDS,
   POWER_UP_SPAWN_INTERVAL_SECONDS,
-  ROAD_X_CENTERS,
-  ROAD_Y_CENTERS,
-  ROAD_WIDTH,
   RADIUS_BOOST_COOLDOWN_SECONDS,
   RADIUS_BOOST_DURATION_SECONDS,
   SPATIAL_HASH_CELL_SIZE,
@@ -709,41 +706,7 @@ function wrapRoutePosition(value: number, minimum: number, maximum: number): num
   return value;
 }
 
-function applyTrafficSignal(
-  object: WorldObjectState,
-  current: number,
-  next: number,
-  elapsedSeconds: number,
-): number {
-  const motion = object.motion;
-  if (!motion || motion.kind !== "vehicle") {
-    return next;
-  }
-  const phase = elapsedSeconds % 16;
-  const hasGreen = motion.axis === "y" ? phase < 6 : phase >= 8 && phase < 14;
-  if (hasGreen) {
-    return next;
-  }
-  const stopDistance = ROAD_WIDTH / 2 + object.size.y / 2 + 0.8;
-  const intersections = motion.axis === "x" ? ROAD_X_CENTERS : ROAD_Y_CENTERS;
-  for (const intersection of intersections) {
-    const currentDistance = (intersection - current) * motion.direction;
-    const nextDistance = (intersection - next) * motion.direction;
-    if (Math.abs(currentDistance - stopDistance) < 0.05) {
-      return current;
-    }
-    if (currentDistance > stopDistance && nextDistance <= stopDistance) {
-      return intersection - motion.direction * stopDistance;
-    }
-  }
-  return next;
-}
-
-function moveRoutedObject(
-  object: WorldObjectState,
-  deltaSeconds: number,
-  elapsedSeconds: number,
-): WorldObjectState {
+function moveRoutedObject(object: WorldObjectState, deltaSeconds: number): WorldObjectState {
   if (object.status !== "static" || !object.motion) {
     return object;
   }
@@ -755,12 +718,11 @@ function moveRoutedObject(
     position.x = motion.lateralCoordinate;
   }
   const current = position[motion.axis];
-  const routed = wrapRoutePosition(
+  position[motion.axis] = wrapRoutePosition(
     current + motion.direction * motion.speed * deltaSeconds,
     motion.minimum,
     motion.maximum,
   );
-  position[motion.axis] = applyTrafficSignal(object, current, routed, elapsedSeconds);
   return { ...object, position };
 }
 
@@ -869,6 +831,9 @@ function enforceVehicleSpacing(objects: readonly WorldObjectState[]): readonly W
 }
 
 function activateObject(object: WorldObjectState, hole: HoleState): WorldObjectState {
+  if (object.routeMotion?.kind === "vehicle") {
+    return object;
+  }
   return {
     ...object,
     status: "active",
@@ -876,6 +841,52 @@ function activateObject(object: WorldObjectState, hole: HoleState): WorldObjectS
     activeTime: 0,
     motion: null,
   };
+}
+
+function findContainingHole(
+  object: WorldObjectState,
+  holes: readonly HoleState[],
+): HoleState | null {
+  let nearest: HoleState | null = null;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+  for (const hole of holes) {
+    if (hole.eliminationRemaining > 0 || hole.isOut || !canFitThroughHole(hole, object)) {
+      continue;
+    }
+    const distance = Math.hypot(
+      object.position.x - hole.position.x,
+      object.position.y - hole.position.y,
+    );
+    if (
+      distance + object.fitDiameter / 2 <= hole.radius * HOLE_FIT_RATIO &&
+      distance < nearestDistance
+    ) {
+      nearest = hole;
+      nearestDistance = distance;
+    }
+  }
+  return nearest;
+}
+
+function consumeFullyCoveredVehicles(
+  objects: readonly WorldObjectState[],
+  holes: readonly HoleState[],
+): readonly WorldObjectState[] {
+  return objects.map((object) => {
+    if (object.status !== "static" || object.motion?.kind !== "vehicle") {
+      return object;
+    }
+    const hole = findContainingHole(object, holes);
+    if (!hole) {
+      return object;
+    }
+    return {
+      ...object,
+      status: "consumed",
+      claimedBy: hole.id,
+      motion: null,
+    };
+  });
 }
 
 function applyConsumedScores(
@@ -946,18 +957,18 @@ export function stepSimulation(
       moveRoutedObject(
         releasedObjectIds.has(object.id) ? { ...object, claimedBy: null } : object,
         safeDelta,
-        state.elapsed,
       ),
     ),
   );
+  const vehicleResolvedObjects = consumeFullyCoveredVehicles(routedObjects, competitiveHoles);
   let objects: WorldObjectState[] = [
-    ...stepActivePhysics(routedObjects, competitiveHoles, safeDelta),
+    ...stepActivePhysics(vehicleResolvedObjects, competitiveHoles, safeDelta),
   ].map((object) => ({
     ...object,
     footprintFadeRemaining: Math.max(0, (object.footprintFadeRemaining ?? 0) - safeDelta),
   }));
   const newlyConsumed = objects.filter(
-    (object) => object.status === "consumed" && previousStatusById.get(object.id) === "active",
+    (object) => object.status === "consumed" && previousStatusById.get(object.id) !== "consumed",
   );
   let scoredHoles = applyConsumedScores(competitiveHoles, newlyConsumed);
   const events: SimulationEvent[] = [
@@ -1007,7 +1018,13 @@ export function stepSimulation(
     if (!owner) continue;
     const footprintConsumed: WorldObjectState[] = [];
     objects = objects.map((object) => {
-      if (object.status === "consumed" || !isInsideFootprint(object, footprint)) return object;
+      if (
+        object.status === "consumed" ||
+        object.routeMotion?.kind === "vehicle" ||
+        !isInsideFootprint(object, footprint)
+      ) {
+        return object;
+      }
       const consumed = {
         ...object,
         status: "consumed" as const,
@@ -1076,7 +1093,7 @@ export function stepSimulation(
   const objectIndexById = new Map(objects.map((object, index) => [object.id, index] as const));
   const spatialHash = new SpatialHash(SPATIAL_HASH_CELL_SIZE);
   for (const object of objects) {
-    if (object.status === "static") {
+    if (object.status === "static" && object.motion === null) {
       spatialHash.insert(object.id, object.position);
     }
   }
@@ -1100,15 +1117,7 @@ export function stepSimulation(
         object.position.x - hole.position.x,
         object.position.y - hole.position.y,
       );
-      const mobileObject = object.motion !== null;
-
-      // For moving objects (vehicles), only activate if they can fit through the hole
-      // For static objects, activate on contact
-      const shouldActivate = mobileObject
-        ? canFitThroughHole(hole, object) && distance <= hole.radius + footprintRadius * 0.5
-        : distance <= hole.radius + footprintRadius;
-
-      if (shouldActivate) {
+      if (distance <= hole.radius + footprintRadius) {
         objects[index] = activateObject(object, hole);
       }
     }

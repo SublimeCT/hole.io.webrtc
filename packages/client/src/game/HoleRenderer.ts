@@ -67,6 +67,7 @@ const FLASH_DURATION = 0.85;
 const EXPLOSION_DURATION = 0.75;
 const STREAK_COUNT = 5;
 const RIPPLE_COUNT = 2;
+const ARC_GEOMETRY_UPDATE_STEP = 1 / RING_SEGMENTS;
 
 function resolveColor(
   hole: HoleState,
@@ -511,7 +512,7 @@ export class HoleRenderer {
 
   #syncProgress(visual: HoleVisual, hole: HoleState): void {
     const progress = getHoleProgress(hole.score).progress;
-    if (Math.abs(progress - visual.progressValue) < 0.005) return;
+    if (Math.abs(progress - visual.progressValue) < ARC_GEOMETRY_UPDATE_STEP) return;
     const thetaLength = Math.max(0.001, progress * Math.PI * 2);
     const thetaStart = Math.PI / 2 - thetaLength; // 12 点起、顺时针填充
     const geometry = new THREE.RingGeometry(
@@ -622,7 +623,7 @@ export class HoleRenderer {
     }
     visual.lastFuse = fuse;
     const fraction = Math.max(0, Math.min(1, fuse / BOMB_FUSE_SECONDS));
-    if (Math.abs(fraction - visual.bombValue) >= 0.005) {
+    if (Math.abs(fraction - visual.bombValue) >= ARC_GEOMETRY_UPDATE_STEP) {
       const thetaLength = Math.max(0.001, fraction * Math.PI * 2);
       const thetaStart = Math.PI / 2 - thetaLength;
       const geometry = new THREE.RingGeometry(

@@ -8,6 +8,8 @@ import {
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
+import { VEHICLE_SINK_DURATION_SECONDS, getVehicleSinkTransform } from "./vehicleSink";
+
 interface LoadedPart {
   geometry: THREE.BufferGeometry;
   material: THREE.Material | THREE.Material[];
@@ -47,19 +49,29 @@ const SMALL_OBJECT_RENDER_DISTANCE = 150;
 const SMALL_OBJECT_SCORE_THRESHOLD = 10;
 const MODEL_LOAD_CONCURRENCY = 4;
 const VISIBILITY_REFRESH_SECONDS = 0.1;
+const INSTANCE_CELL_SIZE = 32;
 
-const HIDDEN_MATRIX = new THREE.Matrix4().makeScale(0, 0, 0);
+function instanceBatchKey(object: WorldObjectState): string {
+  if (object.motion !== null) {
+    return "dynamic";
+  }
+  return `${Math.floor(object.position.x / INSTANCE_CELL_SIZE)}:${Math.floor(
+    object.position.y / INSTANCE_CELL_SIZE,
+  )}`;
+}
 
 export class CityObjectRenderer {
   readonly #scene: THREE.Scene;
   readonly #loader = new GLTFLoader();
   readonly #prefabs = new Map<string, LoadedPrefab>();
+  readonly #instanceBatches = new Set<InstanceBatch>();
   readonly #instances = new Map<string, ObjectInstance>();
   readonly #activeModels = new Map<string, THREE.Group>();
   readonly #transparentModels = new Map<string, THREE.Group>();
   readonly #transparentObjectIds = new Set<string>();
   readonly #hiddenSmallObjectIds = new Set<string>();
   readonly #animatedModels = new Map<string, AnimatedModel>();
+  readonly #vehicleSinkElapsed = new Map<string, number>();
   readonly #lastStatus = new Map<string, WorldObjectState["status"]>();
   readonly #lastSizeMultiplier = new Map<string, number>();
   readonly #position = new THREE.Vector3();
@@ -67,6 +79,9 @@ export class CityObjectRenderer {
   readonly #scale = new THREE.Vector3(1, 1, 1);
   readonly #worldMatrix = new THREE.Matrix4();
   readonly #partMatrix = new THREE.Matrix4();
+  readonly #textures = new Set<THREE.Texture>();
+  /** 按可视属性复用 MeshBasicMaterial，避免每个 prefab part 各建一份等价材质。 */
+  readonly #materialCache = new Map<string, THREE.MeshBasicMaterial>();
   #visibilityRefreshElapsed = VISIBILITY_REFRESH_SECONDS;
 
   constructor(scene: THREE.Scene) {
@@ -115,53 +130,64 @@ export class CityObjectRenderer {
         continue;
       }
       const prefabObjects = objectsByPrefab.get(definition.id) ?? [];
-      const instanceCount = prefabObjects.reduce((total, object) => total + object.stackLayers, 0);
-      const hasDynamicInstances =
-        prefab.animations.length === 0 && prefabObjects.some((object) => object.motion !== null);
-      const meshes = prefab.parts.map((part) => {
-        const mesh = new THREE.InstancedMesh(part.geometry, part.material, instanceCount);
-        mesh.instanceMatrix.setUsage(
-          hasDynamicInstances ? THREE.DynamicDrawUsage : THREE.StaticDrawUsage,
-        );
-        mesh.name = `instances:${definition.id}`;
-        this.#scene.add(mesh);
-        return mesh;
-      });
-      let nextIndex = 0;
-      const indicesByObjectId = new Map<string, readonly number[]>();
-      prefabObjects.forEach((object) => {
-        const indices = Array.from({ length: object.stackLayers }, (_, layer) => nextIndex + layer);
-        nextIndex += object.stackLayers;
-        indicesByObjectId.set(object.id, indices);
-      });
-      const batch: InstanceBatch = {
-        prefab,
-        meshes,
-        objectIds: prefabObjects.map((object) => object.id),
-        indicesByObjectId,
-      };
-      prefabObjects.forEach((object) => {
-        const indices = indicesByObjectId.get(object.id);
-        if (!indices) {
-          return;
-        }
-        this.#instances.set(object.id, { batch, indices });
-        if (object.motion && prefab.animations.length > 0) {
-          batch.meshes.forEach((mesh) => {
-            indices.forEach((index) => mesh.setMatrixAt(index, HIDDEN_MATRIX));
-          });
-          const animated = this.#getAnimatedModel(object.id, prefab);
-          this.#setGroupTransform(animated.group, object);
-        } else {
-          this.#setInstanceTransforms(batch, indices, object);
-        }
-        this.#lastStatus.set(object.id, object.status);
-        this.#lastSizeMultiplier.set(object.id, object.sizeMultiplier);
-      });
-      meshes.forEach((mesh) => {
-        mesh.instanceMatrix.needsUpdate = true;
-        mesh.computeBoundingSphere();
-      });
+      const objectsByBatch = new Map<string, WorldObjectState[]>();
+      for (const object of prefabObjects) {
+        const key = instanceBatchKey(object);
+        const batchObjects = objectsByBatch.get(key) ?? [];
+        batchObjects.push(object);
+        objectsByBatch.set(key, batchObjects);
+      }
+      for (const [batchKey, batchObjects] of objectsByBatch) {
+        const instanceCount = batchObjects.reduce((total, object) => total + object.stackLayers, 0);
+        const hasDynamicInstances =
+          prefab.animations.length === 0 && batchObjects.some((object) => object.motion !== null);
+        const meshes = prefab.parts.map((part) => {
+          const mesh = new THREE.InstancedMesh(part.geometry, part.material, instanceCount);
+          mesh.instanceMatrix.setUsage(
+            hasDynamicInstances ? THREE.DynamicDrawUsage : THREE.StaticDrawUsage,
+          );
+          mesh.name = `instances:${definition.id}:${batchKey}`;
+          this.#scene.add(mesh);
+          return mesh;
+        });
+        let nextIndex = 0;
+        const indicesByObjectId = new Map<string, readonly number[]>();
+        batchObjects.forEach((object) => {
+          const indices = Array.from(
+            { length: object.stackLayers },
+            (_, layer) => nextIndex + layer,
+          );
+          nextIndex += object.stackLayers;
+          indicesByObjectId.set(object.id, indices);
+        });
+        const batch: InstanceBatch = {
+          prefab,
+          meshes,
+          objectIds: batchObjects.map((object) => object.id),
+          indicesByObjectId,
+        };
+        this.#instanceBatches.add(batch);
+        batchObjects.forEach((object) => {
+          const indices = indicesByObjectId.get(object.id);
+          if (!indices) {
+            return;
+          }
+          this.#instances.set(object.id, { batch, indices });
+          if (object.motion && prefab.animations.length > 0) {
+            this.#setHiddenInstanceTransforms(batch, indices, object);
+            const animated = this.#getAnimatedModel(object.id, prefab);
+            this.#setGroupTransform(animated.group, object);
+          } else {
+            this.#setInstanceTransforms(batch, indices, object);
+          }
+          this.#lastStatus.set(object.id, object.status);
+          this.#lastSizeMultiplier.set(object.id, object.sizeMultiplier);
+        });
+        meshes.forEach((mesh) => {
+          mesh.instanceMatrix.needsUpdate = true;
+          mesh.computeBoundingSphere();
+        });
+      }
     }
   }
 
@@ -184,13 +210,19 @@ export class CityObjectRenderer {
       }
       const previousStatus = this.#lastStatus.get(object.id);
       const sizeChanged = this.#lastSizeMultiplier.get(object.id) !== object.sizeMultiplier;
+      const vehicleSinkElapsed = this.#advanceVehicleSink(object, previousStatus, deltaSeconds);
       const animated = this.#animatedModels.get(object.id);
       if (animated) {
         const footprintFade = object.footprintFadeRemaining ?? 0;
-        animated.group.visible = object.status !== "consumed" || footprintFade > 0;
+        animated.group.visible =
+          object.status !== "consumed" ||
+          footprintFade > 0 ||
+          (vehicleSinkElapsed !== null && vehicleSinkElapsed < VEHICLE_SINK_DURATION_SECONDS);
         if (animated.group.visible) {
           this.#setGroupTransform(animated.group, object);
-          if (object.status === "consumed") {
+          if (vehicleSinkElapsed !== null) {
+            this.#applyVehicleSink(animated.group, object, vehicleSinkElapsed);
+          } else if (object.status === "consumed") {
             this.#applyFootprintFade(animated.group, object, footprintFade);
           } else {
             this.#restoreModelMaterials(animated.group);
@@ -219,10 +251,8 @@ export class CityObjectRenderer {
           ) > SMALL_OBJECT_RENDER_DISTANCE;
       if (shouldHideSmallObject) {
         if (!wasHiddenSmallObject) {
-          instance.batch.meshes.forEach((mesh) => {
-            instance.indices.forEach((index) => mesh.setMatrixAt(index, HIDDEN_MATRIX));
-            touchedMeshes.add(mesh);
-          });
+          this.#setHiddenInstanceTransforms(instance.batch, instance.indices, object);
+          instance.batch.meshes.forEach((mesh) => touchedMeshes.add(mesh));
           this.#hiddenSmallObjectIds.add(object.id);
         }
         const transparentModel = this.#transparentModels.get(object.id);
@@ -243,10 +273,8 @@ export class CityObjectRenderer {
           this.#shouldFadeBuilding(object, visibilityContext);
       if (shouldFade) {
         if (!wasTransparent) {
-          instance.batch.meshes.forEach((mesh) => {
-            instance.indices.forEach((index) => mesh.setMatrixAt(index, HIDDEN_MATRIX));
-            touchedMeshes.add(mesh);
-          });
+          this.#setHiddenInstanceTransforms(instance.batch, instance.indices, object);
+          instance.batch.meshes.forEach((mesh) => touchedMeshes.add(mesh));
           this.#transparentObjectIds.add(object.id);
         }
         const transparentModel = this.#getTransparentModel(
@@ -290,37 +318,41 @@ export class CityObjectRenderer {
         }
       } else {
         if (previousStatus === "static") {
-          instance.batch.meshes.forEach((mesh) => {
-            instance.indices.forEach((index) => mesh.setMatrixAt(index, HIDDEN_MATRIX));
-            touchedMeshes.add(mesh);
-          });
+          this.#setHiddenInstanceTransforms(instance.batch, instance.indices, object);
+          instance.batch.meshes.forEach((mesh) => touchedMeshes.add(mesh));
         }
         const activeModel = this.#getActiveModel(object.id, instance.batch.prefab, object);
         activeModel.visible =
-          object.status !== "consumed" || (object.footprintFadeRemaining ?? 0) > 0;
+          object.status !== "consumed" ||
+          (object.footprintFadeRemaining ?? 0) > 0 ||
+          (vehicleSinkElapsed !== null && vehicleSinkElapsed < VEHICLE_SINK_DURATION_SECONDS);
         if (activeModel.visible) {
           const fade = object.footprintFadeRemaining ?? 0;
-          activeModel.position.set(
-            object.position.x,
-            object.status === "consumed"
-              ? object.centerY - (1 - fade / FOOTPRINT_MARK_SECONDS) * object.height * 1.4
-              : object.centerY,
-            object.position.y,
-          );
-          activeModel.scale.setScalar(
-            object.sizeMultiplier *
-              (object.status === "consumed" ? Math.max(0.05, fade / FOOTPRINT_MARK_SECONDS) : 1),
-          );
-          activeModel.traverse((child) => {
-            if (!(child instanceof THREE.Mesh)) return;
-            const materials = Array.isArray(child.material) ? child.material : [child.material];
-            materials.forEach((material) => {
-              material.transparent = object.status === "consumed";
-              material.opacity =
-                object.status === "consumed" ? Math.max(0, fade / FOOTPRINT_MARK_SECONDS) : 1;
-              material.depthWrite = object.status !== "consumed";
+          if (vehicleSinkElapsed !== null) {
+            this.#applyVehicleSink(activeModel, object, vehicleSinkElapsed);
+          } else {
+            activeModel.position.set(
+              object.position.x,
+              object.status === "consumed"
+                ? object.centerY - (1 - fade / FOOTPRINT_MARK_SECONDS) * object.height * 1.4
+                : object.centerY,
+              object.position.y,
+            );
+            activeModel.scale.setScalar(
+              object.sizeMultiplier *
+                (object.status === "consumed" ? Math.max(0.05, fade / FOOTPRINT_MARK_SECONDS) : 1),
+            );
+            activeModel.traverse((child) => {
+              if (!(child instanceof THREE.Mesh)) return;
+              const materials = Array.isArray(child.material) ? child.material : [child.material];
+              materials.forEach((material) => {
+                material.transparent = object.status === "consumed";
+                material.opacity =
+                  object.status === "consumed" ? Math.max(0, fade / FOOTPRINT_MARK_SECONDS) : 1;
+                material.depthWrite = object.status !== "consumed";
+              });
             });
-          });
+          }
           activeModel.quaternion.set(
             object.rotation.x,
             object.rotation.y,
@@ -334,12 +366,16 @@ export class CityObjectRenderer {
     }
     touchedMeshes.forEach((mesh) => {
       mesh.instanceMatrix.needsUpdate = true;
+      mesh.computeBoundingSphere();
     });
   }
 
   dispose(): void {
     const geometries = new Set<THREE.BufferGeometry>();
     const materials = new Set<THREE.Material>();
+    this.#instanceBatches.forEach((batch) => {
+      batch.meshes.forEach((mesh) => this.#scene.remove(mesh));
+    });
     for (const prefab of this.#prefabs.values()) {
       for (const part of prefab.parts) {
         geometries.add(part.geometry);
@@ -350,8 +386,6 @@ export class CityObjectRenderer {
         }
       }
     }
-    geometries.forEach((geometry) => geometry.dispose());
-    materials.forEach((material) => material.dispose());
     this.#animatedModels.forEach(({ mixer, group }) => {
       mixer.stopAllAction();
       group.traverse((child) => {
@@ -378,6 +412,21 @@ export class CityObjectRenderer {
       });
       this.#scene.remove(group);
     });
+    geometries.forEach((geometry) => geometry.dispose());
+    materials.forEach((material) => material.dispose());
+    this.#textures.forEach((texture) => texture.dispose());
+    this.#instanceBatches.clear();
+    this.#instances.clear();
+    this.#prefabs.clear();
+    this.#textures.clear();
+    this.#activeModels.clear();
+    this.#transparentModels.clear();
+    this.#animatedModels.clear();
+    this.#vehicleSinkElapsed.clear();
+    this.#transparentObjectIds.clear();
+    this.#hiddenSmallObjectIds.clear();
+    this.#lastStatus.clear();
+    this.#lastSizeMultiplier.clear();
   }
 
   async #loadPrefab(definition: PrefabDefinition): Promise<LoadedPrefab> {
@@ -445,17 +494,30 @@ export class CityObjectRenderer {
     const map = mappedSource?.map ?? null;
     if (map) {
       map.colorSpace = THREE.SRGBColorSpace;
+      this.#textures.add(map);
     }
-    return new THREE.MeshBasicMaterial({
+    const vertexColors = geometry.hasAttribute("color");
+    // key 覆盖全部影响外观的属性：命中即等价、可安全共享（激活/透明态仍先 clone 再改，互不污染）。
+    const baseColor = map
+      ? "ffffff"
+      : (mappedSource?.color ?? new THREE.Color(0xffffff)).getHexString();
+    const key = `${map?.uuid ?? "nomap"}|${baseColor}|${source.transparent ? 1 : 0}|${source.opacity}|${source.alphaTest}|${source.side}|${vertexColors ? 1 : 0}`;
+    const cached = this.#materialCache.get(key);
+    if (cached) {
+      return cached;
+    }
+    const material = new THREE.MeshBasicMaterial({
       color: map ? 0xffffff : (mappedSource?.color ?? new THREE.Color(0xffffff)),
       map,
       transparent: source.transparent,
       opacity: source.opacity,
       alphaTest: source.alphaTest,
       side: source.side,
-      vertexColors: geometry.hasAttribute("color"),
+      vertexColors,
       toneMapped: false,
     });
+    this.#materialCache.set(key, material);
+    return material;
   }
 
   #setInstanceTransforms(
@@ -464,6 +526,18 @@ export class CityObjectRenderer {
     object: WorldObjectState,
   ): void {
     indices.forEach((index, layer) => this.#setInstanceTransform(batch, index, object, layer));
+  }
+
+  #setHiddenInstanceTransforms(
+    batch: InstanceBatch,
+    indices: readonly number[],
+    object: WorldObjectState,
+  ): void {
+    this.#worldMatrix.makeScale(0, 0, 0);
+    this.#worldMatrix.setPosition(object.position.x, object.centerY, object.position.y);
+    batch.meshes.forEach((mesh) => {
+      indices.forEach((index) => mesh.setMatrixAt(index, this.#worldMatrix));
+    });
   }
 
   #setInstanceTransform(
@@ -593,6 +667,36 @@ export class CityObjectRenderer {
       object.rotation.w,
     );
     group.scale.setScalar(object.sizeMultiplier);
+  }
+
+  #advanceVehicleSink(
+    object: WorldObjectState,
+    previousStatus: WorldObjectState["status"] | undefined,
+    deltaSeconds: number,
+  ): number | null {
+    if (object.status !== "consumed" || object.routeMotion?.kind !== "vehicle") {
+      return null;
+    }
+    const elapsed =
+      previousStatus === "consumed"
+        ? Math.min(
+            VEHICLE_SINK_DURATION_SECONDS,
+            (this.#vehicleSinkElapsed.get(object.id) ?? 0) + deltaSeconds,
+          )
+        : 0;
+    this.#vehicleSinkElapsed.set(object.id, elapsed);
+    return elapsed;
+  }
+
+  #applyVehicleSink(group: THREE.Group, object: WorldObjectState, elapsed: number): void {
+    const transform = getVehicleSinkTransform(elapsed, object.height);
+    group.position.set(
+      object.position.x,
+      object.centerY - transform.verticalOffset,
+      object.position.y,
+    );
+    group.scale.setScalar(object.sizeMultiplier * transform.scaleMultiplier);
+    this.#restoreModelMaterials(group);
   }
 
   #applyFootprintFade(group: THREE.Group, object: WorldObjectState, remaining: number): void {
