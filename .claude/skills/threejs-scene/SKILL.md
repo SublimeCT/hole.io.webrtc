@@ -51,7 +51,7 @@ description: Hole.io 客户端的 three.js 场景性能约定——渲染循环�
 
 - 用 CPU profiler（`node:inspector` 跑 N 步 `stepSimulation`，或 Chrome DevTools 录一帧）确认时间到底花在哪，不要凭"标题写了 threejs"就归因到渲染。
 - 区分**稳态帧预算**（每帧固定开销）与**尖峰**（GC、layout thrash、螺旋追赶）——优化手段不同。
-- 模拟侧已知大头：cannon-es 每步为每个洞重建 96 段地面楔形（按 `hole.radius` 缓存可省 ~20%）、`SpatialHash` 用字符串 key（改数值 key 可省 ~15%）。这些都不在渲染管线里。
+- 模拟侧使用每局显式创建/释放的 Rapier Wasm runtime，复用 world、96 段洞缘 collider 和活跃刚体；禁止退回每步重建物理 world。`SpatialHash` 的字符串 key 仍是可测量的模拟热点。这些都不在渲染管线里。
 
 ## 7. 实施前自检清单
 

@@ -23,7 +23,7 @@ import {
   SPEED_BOOST_COOLDOWN_SECONDS,
   SPEED_BOOST_DURATION_SECONDS,
 } from "./constants";
-import { stepActivePhysics } from "./physics";
+import { stepActivePhysics, type SimulationPhysicsRuntime } from "./physics";
 import { isInsideNormalizedFootprint } from "./footprint";
 import { getHoleProgress } from "./progression";
 import { SpatialHash } from "./spatialHash";
@@ -909,6 +909,7 @@ export function stepSimulation(
   state: SimulationState,
   inputs: readonly PlayerInput[],
   deltaSeconds: number,
+  physicsRuntime: SimulationPhysicsRuntime,
 ): SimulationStepResult {
   if (state.status === "finished" || deltaSeconds <= 0) {
     return { state, events: [] };
@@ -962,7 +963,7 @@ export function stepSimulation(
   );
   const vehicleResolvedObjects = consumeFullyCoveredVehicles(routedObjects, competitiveHoles);
   let objects: WorldObjectState[] = [
-    ...stepActivePhysics(vehicleResolvedObjects, competitiveHoles, safeDelta),
+    ...stepActivePhysics(physicsRuntime, vehicleResolvedObjects, competitiveHoles, safeDelta),
   ].map((object) => ({
     ...object,
     footprintFadeRemaining: Math.max(0, (object.footprintFadeRemaining ?? 0) - safeDelta),

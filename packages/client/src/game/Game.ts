@@ -12,6 +12,7 @@ import {
   SIDEWALK_WIDTH,
   SPEED_BOOST_COOLDOWN_SECONDS,
   createInitialSimulation,
+  createSimulationPhysicsRuntime,
   getHoleProgress,
   stepSimulation,
   type AbilityId,
@@ -19,6 +20,7 @@ import {
   type PlayerInput,
   type PowerUpType,
   type SimulationEvent,
+  type SimulationPhysicsRuntime,
   type SimulationState,
   type Vector2,
 } from "@hole-io/shared/simulation";
@@ -157,6 +159,7 @@ export class Game {
   readonly #worldUp = new THREE.Vector3(0, 1, 0);
   #state: SimulationState;
   readonly #mode: GameMode;
+  readonly #physicsRuntime: SimulationPhysicsRuntime | null;
   readonly #localPlayerId: string;
   readonly #playerNames: ReadonlyMap<string, string>;
   readonly #matchId: string | null;
@@ -198,7 +201,7 @@ export class Game {
   #lastBombFuseRemaining = 0;
   #playerSwallowCount = 0;
 
-  private constructor(config: GameConfig) {
+  private constructor(config: GameConfig, physicsRuntime: SimulationPhysicsRuntime | null) {
     const { canvas, ui, preferences } = config;
     this.#canvas = canvas;
     this.#ui = ui;
@@ -208,6 +211,7 @@ export class Game {
     this.#state = config.initialState;
     this.#initialState = config.initialState;
     this.#mode = config.mode;
+    this.#physicsRuntime = physicsRuntime;
     this.#localPlayerId = config.localPlayerId;
     this.#playerNames = config.playerNames;
     this.#matchId = config.matchId;
@@ -285,7 +289,14 @@ export class Game {
   }
 
   static async #instantiate(config: GameConfig): Promise<Game> {
-    const game = new Game(config);
+    const physicsRuntime = config.mode === "guest" ? null : await createSimulationPhysicsRuntime();
+    let game: Game;
+    try {
+      game = new Game(config, physicsRuntime);
+    } catch (error: unknown) {
+      physicsRuntime?.dispose();
+      throw error;
+    }
     try {
       await game.#cityObjects.initialize(game.#state.objects, (loaded, total) => {
         const progress = total === 0 ? 1 : loaded / total;
@@ -321,6 +332,7 @@ export class Game {
     this.#ui.abilityButtons[1].root.removeEventListener("click", this.#activateRadius);
     this.#ui.abilityButtons[2].root.removeEventListener("click", this.#activateBomb);
     document.removeEventListener("visibilitychange", this.#onVisibilityChange);
+    this.#physicsRuntime?.dispose();
     this.#input.dispose();
     this.#feedback.dispose();
     this.#cityObjects.dispose();
@@ -397,6 +409,9 @@ export class Game {
 
   /** offline/host：固定步长推进一步权威模拟，并消费本地 + 远端输入。 */
   #stepAuthoritative(): void {
+    if (this.#physicsRuntime === null) {
+      throw new Error("Guest games cannot run the authoritative simulation");
+    }
     const inputs: PlayerInput[] = [
       {
         playerId: this.#localPlayerId,
@@ -414,7 +429,7 @@ export class Game {
       });
       remote.pendingAbilities = [];
     }
-    const result = stepSimulation(this.#state, inputs, FIXED_STEP_SECONDS);
+    const result = stepSimulation(this.#state, inputs, FIXED_STEP_SECONDS, this.#physicsRuntime);
     this.#state = result.state;
     this.#hostTick += 1;
     result.events.forEach((event) => this.#handleEvent(event));

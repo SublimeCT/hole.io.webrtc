@@ -2,6 +2,8 @@ export * from "./constants";
 export * from "./footprint";
 export * from "./prefabs";
 export * from "./progression";
+export { createSimulationPhysicsRuntime } from "./physics";
+export type { SimulationPhysicsRuntime } from "./physics";
 export { stepSimulation } from "./simulation";
 export { SpatialHash } from "./spatialHash";
 export type * from "./types";

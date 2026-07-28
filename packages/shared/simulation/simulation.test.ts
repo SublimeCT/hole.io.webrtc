@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 
@@ -33,7 +33,8 @@ import {
   SPEED_BOOST_DURATION_SECONDS,
   VEHICLE_SPEED,
 } from "./constants";
-import { stepSimulation } from "./simulation";
+import { createSimulationPhysicsRuntime, type SimulationPhysicsRuntime } from "./physics";
+import { stepSimulation as stepSimulationWithRuntime } from "./simulation";
 import { SpatialHash } from "./spatialHash";
 import {
   BUILDING_PREFAB_IDS,
@@ -45,6 +46,24 @@ import { getHoleProgress } from "./progression";
 import { isInsideNormalizedFootprint } from "./footprint";
 import type { SimulationState, WorldObjectState } from "./types";
 import { CITY_BLOCK_LAYOUTS, RUNTIME_BUILDING_PREFAB_IDS, createInitialSimulation } from "./world";
+
+let physicsRuntime: SimulationPhysicsRuntime;
+
+beforeAll(async () => {
+  physicsRuntime = await createSimulationPhysicsRuntime();
+});
+
+afterAll(() => {
+  physicsRuntime?.dispose();
+});
+
+function stepSimulation(
+  state: SimulationState,
+  inputs: Parameters<typeof stepSimulationWithRuntime>[1],
+  deltaSeconds: number,
+): ReturnType<typeof stepSimulationWithRuntime> {
+  return stepSimulationWithRuntime(state, inputs, deltaSeconds, physicsRuntime);
+}
 
 function stateWithObject(object: WorldObjectState): SimulationState {
   const initial = createInitialSimulation();
@@ -264,6 +283,129 @@ describe("physical swallowing", () => {
 
     expect(result.state.objects[0]?.position.x).toBeGreaterThan(2.3);
     expect(result.state.objects[0]?.status).toBe("consumed");
+  });
+
+  it("keeps simultaneously active objects from passing through each other", () => {
+    const initial = stateWithObject(boxObject());
+    const player = initial.holes[0];
+    if (!player) {
+      throw new Error("Player is required");
+    }
+    const left: WorldObjectState = {
+      ...boxObject(-0.6),
+      id: "left-sphere",
+      shape: "sphere",
+      centerY: 5,
+      fitDiameter: 0.8,
+      status: "active",
+      velocity: { x: 4, y: 0, z: 0 },
+      claimedBy: player.id,
+    };
+    const right: WorldObjectState = {
+      ...left,
+      id: "right-sphere",
+      position: { x: 0.6, y: 0 },
+      velocity: { x: -4, y: 0, z: 0 },
+    };
+    const state: SimulationState = {
+      ...initial,
+      holes: [{ ...player, radius: 10 }],
+      objects: [left, right],
+    };
+    const result = advance(state, 12);
+    const leftResult = result.objects.find((object) => object.id === left.id);
+    const rightResult = result.objects.find((object) => object.id === right.id);
+
+    expect(leftResult?.position.x).toBeLessThan(rightResult?.position.x ?? 0);
+    expect((rightResult?.position.x ?? 0) - (leftResult?.position.x ?? 0)).toBeGreaterThan(0.75);
+  });
+
+  it("applies the existing magnet gravity multiplier inside the owning hole", async () => {
+    const initial = stateWithObject({
+      ...boxObject(),
+      centerY: 5,
+      status: "active",
+      claimedBy: "player",
+    });
+    const player = initial.holes[0];
+    if (!player) {
+      throw new Error("Player is required");
+    }
+    const normalRuntime = await createSimulationPhysicsRuntime();
+    const magnetRuntime = await createSimulationPhysicsRuntime();
+    try {
+      const normal = stepSimulationWithRuntime(
+        { ...initial, holes: [{ ...player, radius: 10 }] },
+        [],
+        1 / 60,
+        normalRuntime,
+      ).state;
+      const magnet = stepSimulationWithRuntime(
+        {
+          ...initial,
+          holes: [
+            {
+              ...player,
+              radius: 10,
+              activePowerUps: [{ type: "magnet", remaining: 10 }],
+            },
+          ],
+        },
+        [],
+        1 / 60,
+        magnetRuntime,
+      ).state;
+
+      expect(magnet.objects[0]?.velocity.y).toBeLessThan(normal.objects[0]?.velocity.y ?? 0);
+      expect(magnet.objects[0]?.velocity.y).toBeCloseTo(
+        (normal.objects[0]?.velocity.y ?? 0) * 3,
+        4,
+      );
+    } finally {
+      normalRuntime.dispose();
+      magnetRuntime.dispose();
+    }
+  });
+
+  it("rebuilds derived Rapier state from canonical simulation state", async () => {
+    const initial = stateWithObject(boxObject());
+    const runtime = await createSimulationPhysicsRuntime();
+    const comparisonRuntime = await createSimulationPhysicsRuntime();
+    try {
+      const active = stepSimulationWithRuntime(initial, [], 1 / 60, runtime).state;
+      const stepped = stepSimulationWithRuntime(active, [], 1 / 60, runtime).state;
+      runtime.reset();
+      const rebuilt = stepSimulationWithRuntime(active, [], 1 / 60, runtime).state;
+      const independent = stepSimulationWithRuntime(active, [], 1 / 60, comparisonRuntime).state;
+
+      expect(rebuilt).toEqual(stepped);
+      expect(rebuilt).toEqual(independent);
+    } finally {
+      runtime.dispose();
+      comparisonRuntime.dispose();
+    }
+  });
+
+  it("replays deterministically and rejects use after disposal", async () => {
+    const firstRuntime = await createSimulationPhysicsRuntime();
+    const secondRuntime = await createSimulationPhysicsRuntime();
+    const initial = stateWithObject(boxObject());
+    try {
+      let first = initial;
+      let second = initial;
+      for (let frame = 0; frame < 90; frame += 1) {
+        first = stepSimulationWithRuntime(first, [], 1 / 60, firstRuntime).state;
+        second = stepSimulationWithRuntime(second, [], 1 / 60, secondRuntime).state;
+      }
+      expect(second).toEqual(first);
+    } finally {
+      firstRuntime.dispose();
+      secondRuntime.dispose();
+    }
+
+    expect(() => firstRuntime.step(initial.objects, initial.holes, 1 / 60)).toThrow(
+      "disposed Rapier physics runtime",
+    );
   });
 });
 

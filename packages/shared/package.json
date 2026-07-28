@@ -12,7 +12,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@sinclair/typebox": "^0.34.0",
-    "cannon-es": "^0.20.0"
+    "@dimforge/rapier3d": "0.19.3",
+    "@sinclair/typebox": "^0.34.0"
   }
 }
