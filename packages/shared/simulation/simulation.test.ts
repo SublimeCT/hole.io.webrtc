@@ -35,6 +35,7 @@ import {
 } from "./constants";
 import { createSimulationPhysicsRuntime, type SimulationPhysicsRuntime } from "./physics";
 import { stepSimulation as stepSimulationWithRuntime } from "./simulation";
+import { createSimulationRuntime, type SimulationRuntime } from "./runtime";
 import { SpatialHash } from "./spatialHash";
 import {
   BUILDING_PREFAB_IDS,
@@ -48,9 +49,11 @@ import type { SimulationState, WorldObjectState } from "./types";
 import { CITY_BLOCK_LAYOUTS, RUNTIME_BUILDING_PREFAB_IDS, createInitialSimulation } from "./world";
 
 let physicsRuntime: SimulationPhysicsRuntime;
+let simulationRuntime: SimulationRuntime;
 
 beforeAll(async () => {
   physicsRuntime = await createSimulationPhysicsRuntime();
+  simulationRuntime = createSimulationRuntime(createInitialSimulation());
 });
 
 afterAll(() => {
@@ -62,7 +65,7 @@ function stepSimulation(
   inputs: Parameters<typeof stepSimulationWithRuntime>[1],
   deltaSeconds: number,
 ): ReturnType<typeof stepSimulationWithRuntime> {
-  return stepSimulationWithRuntime(state, inputs, deltaSeconds, physicsRuntime);
+  return stepSimulationWithRuntime(state, inputs, deltaSeconds, physicsRuntime, simulationRuntime);
 }
 
 function stateWithObject(object: WorldObjectState): SimulationState {
@@ -192,6 +195,37 @@ describe("SpatialHash", () => {
 
     expect(hash.query({ x: 0, y: 0 }, 2)).toContain("near");
     expect(hash.query({ x: 0, y: 0 }, 2)).not.toContain("far");
+  });
+
+  it("removes stale ids without rebuilding every cell", () => {
+    const hash = new SpatialHash(4);
+    hash.insert("moving", { x: 1, y: 1 });
+    hash.remove("moving");
+
+    expect(hash.query({ x: 0, y: 0 }, 2)).not.toContain("moving");
+  });
+});
+
+describe("SimulationRuntime", () => {
+  it("reports only changed route objects and drains its dirty set", async () => {
+    const initial = createInitialSimulation();
+    const routed = initial.objects.find((object) => object.motion !== null);
+    const untouched = initial.objects.find(
+      (object) => object.motion === null && object.status === "static",
+    );
+    if (!routed || !untouched) {
+      throw new Error("Runtime test requires routed and static objects");
+    }
+    const state = { ...initial, holes: [], objects: [routed, untouched] };
+    const runtime = createSimulationRuntime(state);
+    const physics = await createSimulationPhysicsRuntime();
+    try {
+      stepSimulationWithRuntime(state, [], 1 / 60, physics, runtime);
+      expect(runtime.takeDirtyObjects().map((object) => object.id)).toEqual([routed.id]);
+      expect(runtime.takeDirtyObjects()).toEqual([]);
+    } finally {
+      physics.dispose();
+    }
   });
 });
 
@@ -383,6 +417,33 @@ describe("physical swallowing", () => {
     } finally {
       runtime.dispose();
       comparisonRuntime.dispose();
+    }
+  });
+
+  it("updates the hole trimesh without rebuilding its world or active body", async () => {
+    const runtime = await createSimulationPhysicsRuntime();
+    const initial = stateWithObject({
+      ...boxObject(),
+      centerY: 5,
+      status: "active",
+      claimedBy: "player",
+    });
+    const player = initial.holes[0];
+    if (!player) {
+      throw new Error("Player is required");
+    }
+    try {
+      const first = runtime.step(initial.objects, [{ ...player, radius: 3 }], 1 / 60);
+      const beforeResize = runtime.diagnostics;
+      const second = runtime.step(first, [{ ...player, radius: 3.5 }], 1 / 60);
+      const afterResize = runtime.diagnostics;
+
+      expect(second[0]?.status).toBe("active");
+      expect(afterResize.worldsCreated).toBe(beforeResize.worldsCreated);
+      expect(afterResize.activeBodiesCreated).toBe(beforeResize.activeBodiesCreated);
+      expect(afterResize.groundShapeUpdates).toBe(beforeResize.groundShapeUpdates + 1);
+    } finally {
+      runtime.dispose();
     }
   });
 

@@ -72,6 +72,8 @@ export class CityObjectRenderer {
   readonly #hiddenSmallObjectIds = new Set<string>();
   readonly #animatedModels = new Map<string, AnimatedModel>();
   readonly #vehicleSinkElapsed = new Map<string, number>();
+  readonly #objectsById = new Map<string, WorldObjectState>();
+  readonly #continuousObjectIds = new Set<string>();
   readonly #lastStatus = new Map<string, WorldObjectState["status"]>();
   readonly #lastSizeMultiplier = new Map<string, number>();
   readonly #position = new THREE.Vector3();
@@ -92,6 +94,8 @@ export class CityObjectRenderer {
     objects: readonly WorldObjectState[],
     onProgress: (loaded: number, total: number) => void,
   ): Promise<void> {
+    this.#objectsById.clear();
+    objects.forEach((object) => this.#objectsById.set(object.id, object));
     const objectsByPrefab = new Map<string, WorldObjectState[]>();
     for (const object of objects) {
       const prefabObjects = objectsByPrefab.get(object.prefabId) ?? [];
@@ -192,18 +196,29 @@ export class CityObjectRenderer {
   }
 
   sync(
-    objects: readonly WorldObjectState[],
+    changedObjects: readonly WorldObjectState[],
     deltaSeconds = 0,
     visibilityContext: CityVisibilityContext | null = null,
   ): void {
     const touchedMeshes = new Set<THREE.InstancedMesh>();
+    const objectIds = new Set<string>();
+    changedObjects.forEach((object) => {
+      this.#objectsById.set(object.id, object);
+      objectIds.add(object.id);
+    });
+    this.#continuousObjectIds.forEach((objectId) => objectIds.add(objectId));
     this.#visibilityRefreshElapsed += deltaSeconds;
     const refreshVisibility =
       visibilityContext !== null && this.#visibilityRefreshElapsed >= VISIBILITY_REFRESH_SECONDS;
     if (refreshVisibility) {
       this.#visibilityRefreshElapsed = 0;
+      this.#objectsById.forEach((object) => objectIds.add(object.id));
     }
-    for (const object of objects) {
+    for (const objectId of objectIds) {
+      const object = this.#objectsById.get(objectId);
+      if (object === undefined) {
+        continue;
+      }
       const instance = this.#instances.get(object.id);
       if (!instance) {
         continue;
@@ -211,6 +226,15 @@ export class CityObjectRenderer {
       const previousStatus = this.#lastStatus.get(object.id);
       const sizeChanged = this.#lastSizeMultiplier.get(object.id) !== object.sizeMultiplier;
       const vehicleSinkElapsed = this.#advanceVehicleSink(object, previousStatus, deltaSeconds);
+      const needsContinuousUpdate =
+        object.status === "active" ||
+        (object.footprintFadeRemaining ?? 0) > 0 ||
+        (vehicleSinkElapsed !== null && vehicleSinkElapsed < VEHICLE_SINK_DURATION_SECONDS);
+      if (needsContinuousUpdate) {
+        this.#continuousObjectIds.add(object.id);
+      } else {
+        this.#continuousObjectIds.delete(object.id);
+      }
       const animated = this.#animatedModels.get(object.id);
       if (animated) {
         const footprintFade = object.footprintFadeRemaining ?? 0;
@@ -423,6 +447,8 @@ export class CityObjectRenderer {
     this.#transparentModels.clear();
     this.#animatedModels.clear();
     this.#vehicleSinkElapsed.clear();
+    this.#objectsById.clear();
+    this.#continuousObjectIds.clear();
     this.#transparentObjectIds.clear();
     this.#hiddenSmallObjectIds.clear();
     this.#lastStatus.clear();

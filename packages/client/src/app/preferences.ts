@@ -1,10 +1,14 @@
 import { PLAYER_NAME_PATTERN } from "@hole-io/shared/protocol";
 import { isLanguage, type Language } from "./i18n";
 
+export const RENDER_FRAME_RATES = [60, 45] as const;
+export type RenderFrameRate = (typeof RENDER_FRAME_RATES)[number];
+
 export interface GamePreferences {
   playerName: string;
   playerRingColor: string;
   language: Language;
+  renderFrameRate: RenderFrameRate;
 }
 
 const PREFERENCES_KEY = "hole-city-player-preferences";
@@ -14,12 +18,32 @@ export const DEFAULT_PREFERENCES: GamePreferences = {
   playerName: "玩家",
   playerRingColor: "#2bf0ff",
   language: "zh-CN",
+  renderFrameRate: 60,
 };
+
+function isRenderFrameRate(value: unknown): value is RenderFrameRate {
+  return RENDER_FRAME_RATES.some((frameRate) => frameRate === value);
+}
+
+export function getDefaultRenderFrameRate(): RenderFrameRate {
+  const isCoarseTouchDevice =
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(hover: none) and (pointer: coarse)").matches;
+  return isCoarseTouchDevice ? 45 : 60;
+}
+
+function createDefaultPreferences(): GamePreferences {
+  return {
+    ...DEFAULT_PREFERENCES,
+    renderFrameRate: getDefaultRenderFrameRate(),
+  };
+}
 
 export function loadPreferences(): GamePreferences {
   try {
     const saved = localStorage.getItem(PREFERENCES_KEY);
-    if (!saved) return { ...DEFAULT_PREFERENCES };
+    if (!saved) return createDefaultPreferences();
     const parsed: unknown = JSON.parse(saved);
     if (
       typeof parsed === "object" &&
@@ -40,12 +64,16 @@ export function loadPreferences(): GamePreferences {
           ? parsed.playerRingColor
           : DEFAULT_PREFERENCES.playerRingColor,
         language: "language" in parsed && isLanguage(parsed.language) ? parsed.language : "zh-CN",
+        renderFrameRate:
+          "renderFrameRate" in parsed && isRenderFrameRate(parsed.renderFrameRate)
+            ? parsed.renderFrameRate
+            : getDefaultRenderFrameRate(),
       };
     }
   } catch {
     // Local preferences are optional.
   }
-  return { ...DEFAULT_PREFERENCES };
+  return createDefaultPreferences();
 }
 
 export function persistPreferences(preferences: GamePreferences): void {

@@ -19,14 +19,13 @@ import {
   POWER_UP_SPAWN_INTERVAL_SECONDS,
   RADIUS_BOOST_COOLDOWN_SECONDS,
   RADIUS_BOOST_DURATION_SECONDS,
-  SPATIAL_HASH_CELL_SIZE,
   SPEED_BOOST_COOLDOWN_SECONDS,
   SPEED_BOOST_DURATION_SECONDS,
 } from "./constants";
 import { stepActivePhysics, type SimulationPhysicsRuntime } from "./physics";
 import { isInsideNormalizedFootprint } from "./footprint";
 import { getHoleProgress } from "./progression";
-import { SpatialHash } from "./spatialHash";
+import { createSimulationRuntime, type SimulationRuntime } from "./runtime";
 import type {
   AbilityId,
   FootprintStrike,
@@ -93,24 +92,26 @@ function nextRandom(state: number): readonly [number, number] {
 
 function findNearestEdibleObject(
   hole: HoleState,
-  objects: readonly WorldObjectState[],
+  runtime: SimulationRuntime,
 ): readonly [WorldObjectState | null, number] {
   let best: WorldObjectState | null = null;
   let bestDistance = Number.POSITIVE_INFINITY;
-  for (const object of objects) {
-    if (object.status !== "static" || object.motion !== null || !canFitThroughHole(hole, object)) {
+  const detectionRadius = Math.min(BOT_DETECTION_RADIUS, 24);
+  for (const objectId of runtime.queryStaticObjects(hole.position, detectionRadius)) {
+    const object = runtime.getObject(objectId);
+    if (object === undefined) {
       continue;
     }
-    if (
-      Math.hypot(object.position.x - hole.position.x, object.position.y - hole.position.y) >
-      Math.min(BOT_DETECTION_RADIUS, 24)
-    ) {
+    if (object.status !== "static" || object.motion !== null || !canFitThroughHole(hole, object)) {
       continue;
     }
     const distance = Math.hypot(
       object.position.x - hole.position.x,
       object.position.y - hole.position.y,
     );
+    if (distance > detectionRadius) {
+      continue;
+    }
     if (distance < bestDistance || (distance === bestDistance && object.id < (best?.id ?? ""))) {
       best = object;
       bestDistance = distance;
@@ -128,7 +129,7 @@ interface BotDecision {
 
 function decideBotInput(
   hole: HoleState,
-  objects: readonly WorldObjectState[],
+  runtime: SimulationRuntime,
   deltaSeconds: number,
   rngState: number,
 ): BotDecision {
@@ -157,11 +158,13 @@ function decideBotInput(
   };
   let nextRngState = rngState;
   let releasedObjectId: string | null = null;
-  const currentTarget = objects.find(
-    (object) =>
-      object.id === bot.targetObjectId &&
-      (object.status === "static" || (object.status === "active" && object.claimedBy === hole.id)),
-  );
+  const targetObject = bot.targetObjectId ? runtime.getObject(bot.targetObjectId) : undefined;
+  const currentTarget =
+    targetObject &&
+    (targetObject.status === "static" ||
+      (targetObject.status === "active" && targetObject.claimedBy === hole.id))
+      ? targetObject
+      : undefined;
   const targetIsValid =
     currentTarget !== undefined &&
     (currentTarget.status === "active" || canFitThroughHole(hole, currentTarget));
@@ -188,7 +191,7 @@ function decideBotInput(
     (bot.mode === "chase" && !targetIsValid) ||
     (bot.rethinkIn <= 0 && bot.commitRemaining <= 0)
   ) {
-    const [candidate, candidateScore] = findNearestEdibleObject(hole, objects);
+    const [candidate, candidateScore] = findNearestEdibleObject(hole, runtime);
     const currentScore =
       currentTarget && currentTarget.status === "static"
         ? 1 /
@@ -234,11 +237,13 @@ function decideBotInput(
     }
   }
 
-  const target = objects.find(
-    (object) =>
-      object.id === bot.targetObjectId &&
-      (object.status === "static" || (object.status === "active" && object.claimedBy === hole.id)),
-  );
+  const selectedTarget = bot.targetObjectId ? runtime.getObject(bot.targetObjectId) : undefined;
+  const target =
+    selectedTarget &&
+    (selectedTarget.status === "static" ||
+      (selectedTarget.status === "active" && selectedTarget.claimedBy === hole.id))
+      ? selectedTarget
+      : undefined;
   const distanceToTarget = target
     ? Math.hypot(target.position.x - hole.position.x, target.position.y - hole.position.y)
     : Number.POSITIVE_INFINITY;
@@ -626,12 +631,14 @@ function collectPowerUps(
   holes: readonly HoleState[];
   powerUps: SimulationState["powerUps"];
   objects: readonly WorldObjectState[];
+  changedObjectIds: ReadonlySet<string>;
   footprints: readonly FootprintStrike[];
   events: readonly SimulationEvent[];
 } {
   const nextHoles = holes.map((hole) => ({ ...hole }));
   let nextObjects = objects;
   const collected = new Set<string>();
+  const changedObjectIds = new Set<string>();
   const footprints: FootprintStrike[] = [];
   const events: SimulationEvent[] = [];
   for (const powerUp of powerUps) {
@@ -651,20 +658,24 @@ function collectPowerUps(
       nextHoles[holeIndex] = { ...hole, score, radius: radiusForHole(hole, score) };
     } else if (powerUp.type === "shrink") {
       const range = hole.radius * 5;
-      nextObjects = nextObjects.map((object) =>
-        object.status === "static" &&
-        Math.hypot(object.position.x - hole.position.x, object.position.y - hole.position.y) <=
-          range + Math.hypot(object.size.x, object.size.y) / 2
-          ? {
-              ...object,
-              size: { x: object.size.x * 0.5, y: object.size.y * 0.5 },
-              height: object.height * 0.5,
-              sizeMultiplier: object.sizeMultiplier * 0.5,
-              fitDiameter: object.fitDiameter * 0.5,
-              centerY: object.centerY * 0.5,
-            }
-          : object,
-      );
+      nextObjects = nextObjects.map((object) => {
+        if (
+          object.status !== "static" ||
+          Math.hypot(object.position.x - hole.position.x, object.position.y - hole.position.y) >
+            range + Math.hypot(object.size.x, object.size.y) / 2
+        ) {
+          return object;
+        }
+        changedObjectIds.add(object.id);
+        return {
+          ...object,
+          size: { x: object.size.x * 0.5, y: object.size.y * 0.5 },
+          height: object.height * 0.5,
+          sizeMultiplier: object.sizeMultiplier * 0.5,
+          fitDiameter: object.fitDiameter * 0.5,
+          centerY: object.centerY * 0.5,
+        };
+      });
       nextHoles[holeIndex] = addTimedPowerUp(hole, powerUp.type, 0.8);
     } else if (powerUp.type === "foot" || powerUp.type === "doubleFoot") {
       footprints.push(...createFootprints(hole, powerUp.type, elapsed));
@@ -687,6 +698,7 @@ function collectPowerUps(
     holes: nextHoles,
     powerUps: powerUps.filter((powerUp) => !collected.has(powerUp.id)),
     objects: nextObjects,
+    changedObjectIds,
     footprints,
     events,
   };
@@ -742,22 +754,30 @@ function vehicleFootprintsOverlap(left: WorldObjectState, right: WorldObjectStat
   );
 }
 
-function enforceVehicleSpacing(objects: readonly WorldObjectState[]): readonly WorldObjectState[] {
+function enforceVehicleSpacing(
+  objects: WorldObjectState[],
+  runtime: SimulationRuntime,
+  changedObjectIds: Set<string>,
+): void {
   const groups = new Map<string, { index: number; object: WorldObjectState }[]>();
   const vehicleIndices: number[] = [];
-  objects.forEach((object, index) => {
+  for (const objectId of runtime.movingVehicleObjectIds) {
+    const index = runtime.objectIndexById.get(objectId);
+    const object = index === undefined ? undefined : objects[index];
+    if (index === undefined || object === undefined) {
+      continue;
+    }
     const motion = object.motion;
     if (object.status !== "static" || !motion || motion.kind !== "vehicle") {
-      return;
+      continue;
     }
     vehicleIndices.push(index);
     const key = motion.laneId;
     const group = groups.get(key) ?? [];
     group.push({ index, object });
     groups.set(key, group);
-  });
+  }
 
-  const nextObjects = [...objects];
   for (const group of groups.values()) {
     group.sort((left, right) => {
       const leftMotion = left.object.motion;
@@ -776,8 +796,8 @@ function enforceVehicleSpacing(objects: readonly WorldObjectState[]): readonly W
       if (!leaderEntry || !followerEntry || !followerEntry.object.motion) {
         continue;
       }
-      const leader = nextObjects[leaderEntry.index] ?? leaderEntry.object;
-      const follower = nextObjects[followerEntry.index] ?? followerEntry.object;
+      const leader = objects[leaderEntry.index] ?? leaderEntry.object;
+      const follower = objects[followerEntry.index] ?? followerEntry.object;
       const motion = followerEntry.object.motion;
       const leaderPosition = leader.position[motion.axis];
       const followerPosition = follower.position[motion.axis];
@@ -785,14 +805,15 @@ function enforceVehicleSpacing(objects: readonly WorldObjectState[]): readonly W
       if ((leaderPosition - followerPosition) * motion.direction < minimumGap) {
         const position = { ...follower.position };
         position[motion.axis] = leaderPosition - motion.direction * minimumGap;
-        nextObjects[followerEntry.index] = { ...follower, position };
+        objects[followerEntry.index] = { ...follower, position };
+        changedObjectIds.add(follower.id);
       }
     }
   }
   for (let pass = 0; pass < 3; pass += 1) {
     const intersectionCells = new Map<string, number[]>();
     for (const leftIndex of vehicleIndices) {
-      const left = nextObjects[leftIndex];
+      const left = objects[leftIndex];
       if (!left?.motion || left.motion.kind !== "vehicle" || left.status !== "static") {
         continue;
       }
@@ -803,12 +824,12 @@ function enforceVehicleSpacing(objects: readonly WorldObjectState[]): readonly W
           const nearbyIndices =
             intersectionCells.get(`${cellX + offsetX}:${cellY + offsetY}`) ?? [];
           for (const rightIndex of nearbyIndices) {
-            const right = nextObjects[rightIndex];
+            const right = objects[rightIndex];
             if (!right || !vehicleFootprintsOverlap(left, right)) {
               continue;
             }
             const yieldingIndex = left.id > right.id ? leftIndex : rightIndex;
-            const yielding = nextObjects[yieldingIndex];
+            const yielding = objects[yieldingIndex];
             if (!yielding?.motion) {
               continue;
             }
@@ -817,7 +838,8 @@ function enforceVehicleSpacing(objects: readonly WorldObjectState[]): readonly W
               yielding.motion.axis === "x" ? yielding.size.y / 2 : yielding.size.x / 2;
             position[yielding.motion.axis] -=
               yielding.motion.direction * (yieldingHalfLength + 1.4);
-            nextObjects[yieldingIndex] = { ...yielding, position };
+            objects[yieldingIndex] = { ...yielding, position };
+            changedObjectIds.add(yielding.id);
           }
         }
       }
@@ -827,7 +849,39 @@ function enforceVehicleSpacing(objects: readonly WorldObjectState[]): readonly W
       intersectionCells.set(key, indices);
     }
   }
-  return nextObjects;
+}
+
+function moveRoutedObjects(
+  objects: readonly WorldObjectState[],
+  runtime: SimulationRuntime,
+  releasedObjectIds: ReadonlySet<string>,
+  deltaSeconds: number,
+): { objects: readonly WorldObjectState[]; changedObjectIds: ReadonlySet<string> } {
+  const nextObjects = [...objects];
+  const changedObjectIds = new Set<string>();
+  for (const objectId of releasedObjectIds) {
+    const index = runtime.objectIndexById.get(objectId);
+    const object = index === undefined ? undefined : nextObjects[index];
+    if (index === undefined || object === undefined || object.claimedBy === null) {
+      continue;
+    }
+    nextObjects[index] = { ...object, claimedBy: null };
+    changedObjectIds.add(objectId);
+  }
+  for (const objectId of runtime.movingRouteObjectIds) {
+    const index = runtime.objectIndexById.get(objectId);
+    const object = index === undefined ? undefined : nextObjects[index];
+    if (index === undefined || object === undefined) {
+      continue;
+    }
+    const moved = moveRoutedObject(object, deltaSeconds);
+    if (moved !== object) {
+      nextObjects[index] = moved;
+      changedObjectIds.add(objectId);
+    }
+  }
+  enforceVehicleSpacing(nextObjects, runtime, changedObjectIds);
+  return { objects: nextObjects, changedObjectIds };
 }
 
 function activateObject(object: WorldObjectState, hole: HoleState): WorldObjectState {
@@ -871,22 +925,40 @@ function findContainingHole(
 function consumeFullyCoveredVehicles(
   objects: readonly WorldObjectState[],
   holes: readonly HoleState[],
-): readonly WorldObjectState[] {
-  return objects.map((object) => {
+  runtime: SimulationRuntime,
+): {
+  objects: readonly WorldObjectState[];
+  changedObjectIds: ReadonlySet<string>;
+  consumedObjects: readonly WorldObjectState[];
+} {
+  const nextObjects = [...objects];
+  const changedObjectIds = new Set<string>();
+  const consumedObjects: WorldObjectState[] = [];
+  for (const objectId of runtime.movingVehicleObjectIds) {
+    const index = runtime.objectIndexById.get(objectId);
+    const object = index === undefined ? undefined : nextObjects[index];
+    if (index === undefined || object === undefined) {
+      continue;
+    }
     if (object.status !== "static" || object.motion?.kind !== "vehicle") {
-      return object;
+      continue;
     }
     const hole = findContainingHole(object, holes);
     if (!hole) {
-      return object;
+      continue;
     }
-    return {
+    const consumed = {
       ...object,
-      status: "consumed",
+      status: "consumed" as const,
       claimedBy: hole.id,
       motion: null,
+      footprintFadeRemaining: 0,
     };
-  });
+    nextObjects[index] = consumed;
+    changedObjectIds.add(objectId);
+    consumedObjects.push(consumed);
+  }
+  return { objects: nextObjects, changedObjectIds, consumedObjects };
 }
 
 function applyConsumedScores(
@@ -910,12 +982,15 @@ export function stepSimulation(
   inputs: readonly PlayerInput[],
   deltaSeconds: number,
   physicsRuntime: SimulationPhysicsRuntime,
+  simulationRuntime?: SimulationRuntime,
 ): SimulationStepResult {
   if (state.status === "finished" || deltaSeconds <= 0) {
     return { state, events: [] };
   }
 
   const safeDelta = Math.min(deltaSeconds, 0.1);
+  const runtime = simulationRuntime ?? createSimulationRuntime(state);
+  runtime.prepare(state);
   const inputByPlayer = new Map(inputs.map((input) => [input.playerId, input] as const));
   let rngState = state.rngState;
   const timedEffects = updatePowerUpEffects(
@@ -942,7 +1017,7 @@ export function stepSimulation(
     if (hole.kind === "human") {
       return moveHole(hole, inputByPlayer.get(hole.id)?.direction ?? { x: 0, y: 0 }, safeDelta);
     }
-    const decision = decideBotInput(hole, state.objects, safeDelta, rngState);
+    const decision = decideBotInput(hole, runtime, safeDelta, rngState);
     rngState = decision.rngState;
     if (decision.releasedObjectId) releasedObjectIds.add(decision.releasedObjectId);
     return moveHole({ ...hole, bot: decision.bot }, decision.direction, safeDelta);
@@ -952,25 +1027,50 @@ export function stepSimulation(
   const holeResolution = resolveHoleConsumption(bombResolution.holes, safeDelta, rngState);
   const competitiveHoles = holeResolution.holes;
   rngState = holeResolution.rngState;
-  const previousStatusById = new Map(state.objects.map((object) => [object.id, object.status]));
-  const routedObjects = enforceVehicleSpacing(
-    state.objects.map((object) =>
-      moveRoutedObject(
-        releasedObjectIds.has(object.id) ? { ...object, claimedBy: null } : object,
-        safeDelta,
-      ),
-    ),
+  const routed = moveRoutedObjects(state.objects, runtime, releasedObjectIds, safeDelta);
+  runtime.commitObjects(routed.objects, routed.changedObjectIds);
+  const vehicleResolution = consumeFullyCoveredVehicles(routed.objects, competitiveHoles, runtime);
+  runtime.commitObjects(vehicleResolution.objects, vehicleResolution.changedObjectIds);
+
+  const activeObjectIds = new Set(runtime.activeObjectIds);
+  const physicsObjects = stepActivePhysics(
+    physicsRuntime,
+    vehicleResolution.objects,
+    competitiveHoles,
+    safeDelta,
+    activeObjectIds,
+    runtime.objectIndexById,
   );
-  const vehicleResolvedObjects = consumeFullyCoveredVehicles(routedObjects, competitiveHoles);
-  let objects: WorldObjectState[] = [
-    ...stepActivePhysics(physicsRuntime, vehicleResolvedObjects, competitiveHoles, safeDelta),
-  ].map((object) => ({
-    ...object,
-    footprintFadeRemaining: Math.max(0, (object.footprintFadeRemaining ?? 0) - safeDelta),
-  }));
-  const newlyConsumed = objects.filter(
-    (object) => object.status === "consumed" && previousStatusById.get(object.id) !== "consumed",
-  );
+  const physicsConsumed: WorldObjectState[] = [];
+  for (const objectId of activeObjectIds) {
+    const index = runtime.objectIndexById.get(objectId);
+    const previous = runtime.getObject(objectId);
+    const next = index === undefined ? undefined : physicsObjects[index];
+    if (previous?.status !== "consumed" && next?.status === "consumed") {
+      physicsConsumed.push(next);
+    }
+  }
+  runtime.commitObjects(physicsObjects, activeObjectIds);
+
+  let objects: readonly WorldObjectState[] = physicsObjects;
+  const fadingObjectIds = new Set(runtime.fadingObjectIds);
+  if (fadingObjectIds.size > 0) {
+    const fadedObjects = [...objects];
+    for (const objectId of fadingObjectIds) {
+      const index = runtime.objectIndexById.get(objectId);
+      const object = index === undefined ? undefined : fadedObjects[index];
+      if (index === undefined || object === undefined) {
+        continue;
+      }
+      fadedObjects[index] = {
+        ...object,
+        footprintFadeRemaining: Math.max(0, (object.footprintFadeRemaining ?? 0) - safeDelta),
+      };
+    }
+    objects = fadedObjects;
+    runtime.commitObjects(objects, fadingObjectIds);
+  }
+  const newlyConsumed = [...vehicleResolution.consumedObjects, ...physicsConsumed];
   let scoredHoles = applyConsumedScores(competitiveHoles, newlyConsumed);
   const events: SimulationEvent[] = [
     ...bombResolution.events,
@@ -1036,6 +1136,10 @@ export function stepSimulation(
       footprintConsumed.push(consumed);
       return consumed;
     });
+    runtime.commitObjects(
+      objects,
+      footprintConsumed.map((object) => object.id),
+    );
     scoredHoles = applyConsumedScores(scoredHoles, footprintConsumed);
     events.push(
       ...footprintConsumed.map((object) => ({
@@ -1072,7 +1176,8 @@ export function stepSimulation(
   const collection = collectPowerUps(scoredHoles, powerUps, objects, state.elapsed);
   scoredHoles = collection.holes;
   powerUps = collection.powerUps;
-  objects = [...collection.objects];
+  objects = collection.objects;
+  runtime.commitObjects(objects, collection.changedObjectIds);
   footprints = [...footprints, ...collection.footprints];
   events.push(...collection.events);
 
@@ -1091,25 +1196,22 @@ export function stepSimulation(
     return true;
   });
 
-  const objectIndexById = new Map(objects.map((object, index) => [object.id, index] as const));
-  const spatialHash = new SpatialHash(SPATIAL_HASH_CELL_SIZE);
-  for (const object of objects) {
-    if (object.status === "static" && object.motion === null) {
-      spatialHash.insert(object.id, object.position);
-    }
-  }
-
+  const activatedObjectIds = new Set<string>();
+  const activatedObjects = [...objects];
   for (const hole of scoredHoles) {
     if (hole.eliminationRemaining > 0 || hole.isOut) {
       continue;
     }
-    const nearbyIds = spatialHash.query(hole.position, hole.radius + MAX_OBJECT_FOOTPRINT_RADIUS);
+    const nearbyIds = runtime.queryStaticObjects(
+      hole.position,
+      hole.radius + MAX_OBJECT_FOOTPRINT_RADIUS,
+    );
     for (const objectId of nearbyIds) {
-      const index = objectIndexById.get(objectId);
+      const index = runtime.objectIndexById.get(objectId);
       if (index === undefined) {
         continue;
       }
-      const object = objects[index];
+      const object = activatedObjects[index];
       if (!object || object.status !== "static") {
         continue;
       }
@@ -1119,10 +1221,13 @@ export function stepSimulation(
         object.position.y - hole.position.y,
       );
       if (distance <= hole.radius + footprintRadius) {
-        objects[index] = activateObject(object, hole);
+        activatedObjects[index] = activateObject(object, hole);
+        activatedObjectIds.add(objectId);
       }
     }
   }
+  objects = activatedObjects;
+  runtime.commitObjects(objects, activatedObjectIds);
 
   const elapsed = Math.min(state.elapsed + safeDelta, state.elapsed + state.remaining);
   const positionHistory = [

@@ -7,6 +7,7 @@ import type { Vector2 } from "./types";
 export class SpatialHash {
   readonly #cellSize: number;
   readonly #cells = new Map<number, string[]>();
+  readonly #keyById = new Map<string, number>();
 
   constructor(cellSize: number) {
     if (cellSize <= 0) {
@@ -17,12 +18,38 @@ export class SpatialHash {
 
   insert(id: string, position: Vector2): void {
     const key = this.#key(position.x, position.y);
+    const previousKey = this.#keyById.get(id);
+    if (previousKey === key) {
+      return;
+    }
+    if (previousKey !== undefined) {
+      this.remove(id);
+    }
     const cell = this.#cells.get(key);
     if (cell) {
       cell.push(id);
+    } else {
+      this.#cells.set(key, [id]);
+    }
+    this.#keyById.set(id, key);
+  }
+
+  remove(id: string): void {
+    const key = this.#keyById.get(id);
+    if (key === undefined) {
       return;
     }
-    this.#cells.set(key, [id]);
+    const cell = this.#cells.get(key);
+    if (cell) {
+      const index = cell.indexOf(id);
+      if (index >= 0) {
+        cell.splice(index, 1);
+      }
+      if (cell.length === 0) {
+        this.#cells.delete(key);
+      }
+    }
+    this.#keyById.delete(id);
   }
 
   query(position: Vector2, radius: number): readonly string[] {

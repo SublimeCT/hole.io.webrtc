@@ -6,5 +6,7 @@ export { createSimulationPhysicsRuntime } from "./physics";
 export type { SimulationPhysicsRuntime } from "./physics";
 export { stepSimulation } from "./simulation";
 export { SpatialHash } from "./spatialHash";
+export { createSimulationRuntime } from "./runtime";
+export type { SimulationRuntime } from "./runtime";
 export type * from "./types";
 export { createInitialSimulation, createMultiplayerSimulation } from "./world";

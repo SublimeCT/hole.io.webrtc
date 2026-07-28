@@ -4,6 +4,7 @@ import type { HoleState, WorldObjectState } from "./types";
 type RapierModule = typeof import("@dimforge/rapier3d");
 type RapierWorld = import("@dimforge/rapier3d").World;
 type RapierRigidBody = import("@dimforge/rapier3d").RigidBody;
+type RapierCollider = import("@dimforge/rapier3d").Collider;
 
 let rapierModulePromise: Promise<RapierModule> | undefined;
 
@@ -33,15 +34,23 @@ interface ActiveBody {
 interface PhysicsWorldGroup {
   world: RapierWorld;
   groundBody: RapierRigidBody;
+  groundCollider: RapierCollider;
   holeRadius: number | null;
   activeBodies: Map<string, ActiveBody>;
 }
 
 export interface SimulationPhysicsRuntime {
+  readonly diagnostics: {
+    readonly worldsCreated: number;
+    readonly groundShapeUpdates: number;
+    readonly activeBodiesCreated: number;
+  };
   step(
     objects: readonly WorldObjectState[],
     holes: readonly HoleState[],
     deltaSeconds: number,
+    activeObjectIds?: ReadonlySet<string>,
+    objectIndexById?: ReadonlyMap<string, number>,
   ): readonly WorldObjectState[];
   reset(): void;
   dispose(): void;
@@ -152,9 +161,11 @@ function overlappingHole(
 function groupActiveObjects(
   objects: readonly WorldObjectState[],
   holes: readonly HoleState[],
+  activeObjectIds?: ReadonlySet<string>,
+  objectIndexById?: ReadonlyMap<string, number>,
 ): ReadonlyMap<string, PhysicsGroup> {
   const groups = new Map<string, PhysicsGroup>();
-  objects.forEach((object, index) => {
+  const addObject = (object: WorldObjectState, index: number): void => {
     if (object.status !== "active") {
       return;
     }
@@ -163,7 +174,18 @@ function groupActiveObjects(
     const group = groups.get(key) ?? { hole, entries: [] };
     group.entries.push({ object, index });
     groups.set(key, group);
-  });
+  };
+  if (activeObjectIds !== undefined && objectIndexById !== undefined) {
+    for (const objectId of activeObjectIds) {
+      const index = objectIndexById.get(objectId);
+      const object = index === undefined ? undefined : objects[index];
+      if (index !== undefined && object !== undefined) {
+        addObject(object, index);
+      }
+    }
+  } else {
+    objects.forEach(addObject);
+  }
   return groups;
 }
 
@@ -176,74 +198,109 @@ function holeGravityMultiplier(hole: HoleState | null): number {
   );
 }
 
-function wedgeVertices(innerRadius: number, startAngle: number, endAngle: number): Float32Array {
-  const innerStartX = Math.cos(startAngle) * innerRadius;
-  const innerStartZ = Math.sin(startAngle) * innerRadius;
-  const innerEndX = Math.cos(endAngle) * innerRadius;
-  const innerEndZ = Math.sin(endAngle) * innerRadius;
-  const outerEndX = Math.cos(endAngle) * OUTER_GROUND_RADIUS;
-  const outerEndZ = Math.sin(endAngle) * OUTER_GROUND_RADIUS;
-  const outerStartX = Math.cos(startAngle) * OUTER_GROUND_RADIUS;
-  const outerStartZ = Math.sin(startAngle) * OUTER_GROUND_RADIUS;
-  return new Float32Array([
-    innerStartX,
-    0,
-    innerStartZ,
-    innerEndX,
-    0,
-    innerEndZ,
-    outerEndX,
-    0,
-    outerEndZ,
-    outerStartX,
-    0,
-    outerStartZ,
-    innerStartX,
-    -GROUND_THICKNESS,
-    innerStartZ,
-    innerEndX,
-    -GROUND_THICKNESS,
-    innerEndZ,
-    outerEndX,
-    -GROUND_THICKNESS,
-    outerEndZ,
-    outerStartX,
-    -GROUND_THICKNESS,
-    outerStartZ,
-  ]);
+function annularGroundMesh(innerRadius: number): {
+  vertices: Float32Array;
+  indices: Uint32Array;
+} {
+  const vertices = new Float32Array((HOLE_SEGMENTS + 1) * 4 * 3);
+  for (let segment = 0; segment <= HOLE_SEGMENTS; segment += 1) {
+    const angle = (segment / HOLE_SEGMENTS) * Math.PI * 2;
+    const cosine = Math.cos(angle);
+    const sine = Math.sin(angle);
+    const vertexOffset = segment * 12;
+    vertices.set(
+      [
+        cosine * innerRadius,
+        0,
+        sine * innerRadius,
+        cosine * OUTER_GROUND_RADIUS,
+        0,
+        sine * OUTER_GROUND_RADIUS,
+        cosine * innerRadius,
+        -GROUND_THICKNESS,
+        sine * innerRadius,
+        cosine * OUTER_GROUND_RADIUS,
+        -GROUND_THICKNESS,
+        sine * OUTER_GROUND_RADIUS,
+      ],
+      vertexOffset,
+    );
+  }
+  const indices = new Uint32Array(HOLE_SEGMENTS * 8 * 3);
+  let indexOffset = 0;
+  for (let segment = 0; segment < HOLE_SEGMENTS; segment += 1) {
+    const current = segment * 4;
+    const next = current + 4;
+    const topInner = current;
+    const topOuter = current + 1;
+    const bottomInner = current + 2;
+    const bottomOuter = current + 3;
+    const nextTopInner = next;
+    const nextTopOuter = next + 1;
+    const nextBottomInner = next + 2;
+    const nextBottomOuter = next + 3;
+    indices.set(
+      [
+        topInner,
+        nextTopInner,
+        nextTopOuter,
+        topInner,
+        nextTopOuter,
+        topOuter,
+        bottomInner,
+        bottomOuter,
+        nextBottomOuter,
+        bottomInner,
+        nextBottomOuter,
+        nextBottomInner,
+        topInner,
+        bottomInner,
+        nextBottomInner,
+        topInner,
+        nextBottomInner,
+        nextTopInner,
+        topOuter,
+        nextTopOuter,
+        nextBottomOuter,
+        topOuter,
+        nextBottomOuter,
+        bottomOuter,
+      ],
+      indexOffset,
+    );
+    indexOffset += 24;
+  }
+  return { vertices, indices };
 }
 
 function createGroundBody(
   RAPIER: RapierModule,
   world: RapierWorld,
   hole: HoleState | null,
-): RapierRigidBody {
+): { groundBody: RapierRigidBody; groundCollider: RapierCollider } {
   const groundBody = world.createRigidBody(
     RAPIER.RigidBodyDesc.fixed().setTranslation(hole?.position.x ?? 0, 0, hole?.position.y ?? 0),
   );
   if (hole === null) {
-    world.createCollider(
+    const groundCollider = world.createCollider(
       configureCollider(
         new RAPIER.ColliderDesc(new RAPIER.HalfSpace({ x: 0, y: 1, z: 0 })),
         GROUND_COLLISION_GROUPS,
       ),
       groundBody,
     );
-    return groundBody;
+    return { groundBody, groundCollider };
   }
 
-  for (let segment = 0; segment < HOLE_SEGMENTS; segment += 1) {
-    const startAngle = (segment / HOLE_SEGMENTS) * Math.PI * 2;
-    const endAngle = ((segment + 1) / HOLE_SEGMENTS) * Math.PI * 2;
-    const descriptor = RAPIER.ColliderDesc.convexHull(
-      wedgeVertices(hole.radius, startAngle, endAngle),
-    );
-    if (descriptor === null) {
-      throw new Error(`Rapier could not create ground wedge ${segment} for radius ${hole.radius}`);
-    }
-    world.createCollider(configureCollider(descriptor, GROUND_COLLISION_GROUPS), groundBody);
-  }
-  return groundBody;
+  const mesh = annularGroundMesh(hole.radius);
+  const groundCollider = world.createCollider(
+    configureCollider(
+      RAPIER.ColliderDesc.trimesh(mesh.vertices, mesh.indices),
+      GROUND_COLLISION_GROUPS,
+    ),
+    groundBody,
+  );
+  return { groundBody, groundCollider };
 }
 
 function sameVector(
@@ -305,20 +362,33 @@ class RapierPhysicsRuntime implements SimulationPhysicsRuntime {
   readonly #RAPIER: RapierModule;
   readonly #groups = new Map<string, PhysicsWorldGroup>();
   #disposed = false;
+  #worldsCreated = 0;
+  #groundShapeUpdates = 0;
+  #activeBodiesCreated = 0;
 
   constructor(RAPIER: RapierModule) {
     this.#RAPIER = RAPIER;
+  }
+
+  get diagnostics(): SimulationPhysicsRuntime["diagnostics"] {
+    return {
+      worldsCreated: this.#worldsCreated,
+      groundShapeUpdates: this.#groundShapeUpdates,
+      activeBodiesCreated: this.#activeBodiesCreated,
+    };
   }
 
   step(
     objects: readonly WorldObjectState[],
     holes: readonly HoleState[],
     deltaSeconds: number,
+    activeObjectIds?: ReadonlySet<string>,
+    objectIndexById?: ReadonlyMap<string, number>,
   ): readonly WorldObjectState[] {
     if (this.#disposed) {
       throw new Error("Cannot step a disposed Rapier physics runtime");
     }
-    const groups = groupActiveObjects(objects, holes);
+    const groups = groupActiveObjects(objects, holes, activeObjectIds, objectIndexById);
     this.#removeStaleWorlds(holes);
     this.#removeStaleBodies(groups);
     if (groups.size === 0) {
@@ -345,6 +415,7 @@ class RapierPhysicsRuntime implements SimulationPhysicsRuntime {
         if (activeBody === undefined) {
           activeBody = createBody(this.#RAPIER, worldGroup.world, object);
           worldGroup.activeBodies.set(object.id, activeBody);
+          this.#activeBodiesCreated += 1;
         } else {
           syncBodyFromState(activeBody.body, object);
         }
@@ -435,21 +506,24 @@ class RapierPhysicsRuntime implements SimulationPhysicsRuntime {
   #prepareWorld(key: string, hole: HoleState | null): PhysicsWorldGroup {
     let group = this.#groups.get(key);
     const holeRadius = hole?.radius ?? null;
-    if (group !== undefined && group.holeRadius !== holeRadius) {
-      group.world.free();
-      this.#groups.delete(key);
-      group = undefined;
-    }
     if (group === undefined) {
       const world = new this.#RAPIER.World({ x: 0, y: -GRAVITY_METERS_PER_SECOND_SQUARED, z: 0 });
+      this.#worldsCreated += 1;
+      const ground = createGroundBody(this.#RAPIER, world, hole);
       group = {
         world,
-        groundBody: createGroundBody(this.#RAPIER, world, hole),
+        ...ground,
         holeRadius,
         activeBodies: new Map(),
       };
       this.#groups.set(key, group);
     } else if (hole !== null) {
+      if (group.holeRadius !== holeRadius) {
+        const mesh = annularGroundMesh(hole.radius);
+        group.groundCollider.setShape(new this.#RAPIER.TriMesh(mesh.vertices, mesh.indices));
+        group.holeRadius = holeRadius;
+        this.#groundShapeUpdates += 1;
+      }
       const translation = group.groundBody.translation();
       if (translation.x !== hole.position.x || translation.z !== hole.position.y) {
         group.groundBody.setTranslation({ x: hole.position.x, y: 0, z: hole.position.y }, true);
@@ -494,6 +568,8 @@ export function stepActivePhysics(
   objects: readonly WorldObjectState[],
   holes: readonly HoleState[],
   deltaSeconds: number,
+  activeObjectIds?: ReadonlySet<string>,
+  objectIndexById?: ReadonlyMap<string, number>,
 ): readonly WorldObjectState[] {
-  return runtime.step(objects, holes, deltaSeconds);
+  return runtime.step(objects, holes, deltaSeconds, activeObjectIds, objectIndexById);
 }

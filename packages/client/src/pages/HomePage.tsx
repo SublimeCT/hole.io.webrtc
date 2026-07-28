@@ -2,7 +2,13 @@ import { useEffect, useRef, useState, type FormEvent, type ReactElement } from "
 import { useNavigate } from "react-router-dom";
 import { PLAYER_NAME_PATTERN } from "@hole-io/shared/protocol";
 
-import { loadPreferences, persistPreferences, type GamePreferences } from "../app/preferences";
+import {
+  loadPreferences,
+  persistPreferences,
+  RENDER_FRAME_RATES,
+  type GamePreferences,
+  type RenderFrameRate,
+} from "../app/preferences";
 import {
   applyDocumentLanguage,
   LANGUAGES,
@@ -61,6 +67,9 @@ export function HomePage() {
   const [draftName, setDraftName] = useState(preferences.playerName);
   const [draftColor, setDraftColor] = useState(preferences.playerRingColor);
   const [draftLanguage, setDraftLanguage] = useState<Language>(preferences.language);
+  const [draftRenderFrameRate, setDraftRenderFrameRate] = useState<RenderFrameRate>(
+    preferences.renderFrameRate,
+  );
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [focusedMenu, setFocusedMenu] = useState(0);
   const [toastMessage, setToastMessage] = useState("");
@@ -262,6 +271,7 @@ export function HomePage() {
         setDraftName(preferences.playerName);
         setDraftColor(preferences.playerRingColor);
         setDraftLanguage(preferences.language);
+        setDraftRenderFrameRate(preferences.renderFrameRate);
         setSettingsOpen(true);
         return;
       case "share":
@@ -307,10 +317,11 @@ export function HomePage() {
       return;
     }
     nameInput.current?.setCustomValidity("");
-    const nextPreferences = {
+    const nextPreferences: GamePreferences = {
       playerName,
       playerRingColor: draftColor,
       language: draftLanguage,
+      renderFrameRate: draftRenderFrameRate,
     };
     setPreferences(nextPreferences);
     persistPreferences(nextPreferences);
@@ -471,6 +482,28 @@ export function HomePage() {
                 ))}
               </select>
             </div>
+            <fieldset className="home-field home-fieldset">
+              <legend className="home-field-label">
+                {translate(preferences.language, "frameRate")}
+              </legend>
+              <div className="home-segmented">
+                {RENDER_FRAME_RATES.map((frameRate) => (
+                  <label
+                    key={frameRate}
+                    className={`home-segment ${draftRenderFrameRate === frameRate ? "is-on" : ""}`}
+                  >
+                    <input
+                      type="radio"
+                      name="render-frame-rate"
+                      value={frameRate}
+                      checked={draftRenderFrameRate === frameRate}
+                      onChange={() => setDraftRenderFrameRate(frameRate)}
+                    />
+                    <span>{frameRate} fps</span>
+                  </label>
+                ))}
+              </div>
+            </fieldset>
             <div className="home-field">
               <label className="home-field-label">
                 {translate(preferences.language, "ringColor")}

@@ -13,6 +13,7 @@ import {
   SPEED_BOOST_COOLDOWN_SECONDS,
   createInitialSimulation,
   createSimulationPhysicsRuntime,
+  createSimulationRuntime,
   getHoleProgress,
   stepSimulation,
   type AbilityId,
@@ -21,8 +22,10 @@ import {
   type PowerUpType,
   type SimulationEvent,
   type SimulationPhysicsRuntime,
+  type SimulationRuntime,
   type SimulationState,
   type Vector2,
+  type WorldObjectState,
 } from "@hole-io/shared/simulation";
 import {
   applyCheckpointToState,
@@ -160,6 +163,7 @@ export class Game {
   #state: SimulationState;
   readonly #mode: GameMode;
   readonly #physicsRuntime: SimulationPhysicsRuntime | null;
+  readonly #simulationRuntime: SimulationRuntime | null;
   readonly #localPlayerId: string;
   readonly #playerNames: ReadonlyMap<string, string>;
   readonly #matchId: string | null;
@@ -182,10 +186,15 @@ export class Game {
   #inputSendAccumulator = 0;
   #lastTime = 0;
   #accumulator = 0;
+  #renderDeltaAccumulator = 0;
+  #nextRenderTime = 0;
   #hudAccumulator = 0;
   #matchStarted = false;
   #pageVisible = document.visibilityState !== "hidden";
-  #sceneDirty = true;
+  #forceRender = true;
+  #fullObjectSyncPending = true;
+  readonly #guestDirtyObjectIds = new Set<string>();
+  readonly #objectIndexById = new Map<string, number>();
   /** 当前领先者 hole id（12.5Hz HUD 内更新），渲染帧直接读，避免每帧重排 holes。 */
   #leaderId: string | undefined;
   #resizePending = false;
@@ -194,6 +203,7 @@ export class Game {
   #viewportWidth = 0;
   #viewportHeight = 0;
   readonly #preferences: GamePreferences;
+  readonly #renderIntervalMilliseconds: number;
   readonly #onMatchEnd: (result: MatchResult) => void;
   readonly #onPoopHit: (playerCount: number) => void;
   readonly #pendingAbilities = new Set<AbilityId>();
@@ -201,17 +211,26 @@ export class Game {
   #lastBombFuseRemaining = 0;
   #playerSwallowCount = 0;
 
-  private constructor(config: GameConfig, physicsRuntime: SimulationPhysicsRuntime | null) {
+  private constructor(
+    config: GameConfig,
+    physicsRuntime: SimulationPhysicsRuntime | null,
+    simulationRuntime: SimulationRuntime | null,
+  ) {
     const { canvas, ui, preferences } = config;
     this.#canvas = canvas;
     this.#ui = ui;
     this.#preferences = preferences;
+    this.#renderIntervalMilliseconds = 1_000 / preferences.renderFrameRate;
     this.#onMatchEnd = config.onMatchEnd;
     this.#onPoopHit = config.onPoopHit;
     this.#state = config.initialState;
     this.#initialState = config.initialState;
     this.#mode = config.mode;
     this.#physicsRuntime = physicsRuntime;
+    this.#simulationRuntime = simulationRuntime;
+    config.initialState.objects.forEach((object, index) =>
+      this.#objectIndexById.set(object.id, index),
+    );
     this.#localPlayerId = config.localPlayerId;
     this.#playerNames = config.playerNames;
     this.#matchId = config.matchId;
@@ -239,7 +258,6 @@ export class Game {
     this.#buildScene();
     this.#holeRenderer.build(config.initialState.holes);
     this.#applyResize();
-    this.#syncScene(1);
     this.#updateHud();
     window.addEventListener("resize", this.#resize);
     window.addEventListener("keydown", this.#onShortcut);
@@ -290,9 +308,11 @@ export class Game {
 
   static async #instantiate(config: GameConfig): Promise<Game> {
     const physicsRuntime = config.mode === "guest" ? null : await createSimulationPhysicsRuntime();
+    const simulationRuntime =
+      config.mode === "guest" ? null : createSimulationRuntime(config.initialState);
     let game: Game;
     try {
-      game = new Game(config, physicsRuntime);
+      game = new Game(config, physicsRuntime, simulationRuntime);
     } catch (error: unknown) {
       physicsRuntime?.dispose();
       throw error;
@@ -310,7 +330,7 @@ export class Game {
       throw error;
     }
     config.ui.loading.hidden = true;
-    game.#cityObjects.sync(game.#state.objects);
+    game.#syncScene(1);
     return game;
   }
 
@@ -318,6 +338,9 @@ export class Game {
     this.#feedback.activate();
     this.#matchStarted = true;
     this.#lastTime = performance.now();
+    this.#nextRenderTime = this.#lastTime;
+    this.#renderDeltaAccumulator = 0;
+    this.#forceRender = true;
     this.#renderer.setAnimationLoop(this.#frame);
   }
 
@@ -352,6 +375,7 @@ export class Game {
     this.#lastTime = time;
     this.#accumulator += frameSeconds;
     this.#hudAccumulator += frameSeconds;
+    this.#renderDeltaAccumulator += frameSeconds;
 
     if (this.#mode === "guest") {
       // guest：不推进权威模拟（位置/分数由 host 快照决定），只按节拍上报本地输入。
@@ -394,12 +418,26 @@ export class Game {
       this.#updateHud();
       this.#hudAccumulator = 0;
     }
-    if (this.#matchStarted || this.#sceneDirty) {
-      this.#syncScene(frameSeconds);
-      this.#sceneDirty = false;
+    const renderDue =
+      this.#forceRender ||
+      this.#state.status === "finished" ||
+      time + Number.EPSILON >= this.#nextRenderTime;
+    if (renderDue) {
+      if (this.#matchStarted || this.#forceRender) {
+        this.#syncScene(this.#renderDeltaAccumulator);
+      }
+      this.#renderer.clear(true, true, true);
+      this.#renderer.render(this.#scene, this.#camera);
+      this.#renderDeltaAccumulator = 0;
+      this.#forceRender = false;
+      if (time < this.#nextRenderTime) {
+        this.#nextRenderTime = time + this.#renderIntervalMilliseconds;
+      } else {
+        const elapsedDeadlines =
+          Math.floor((time - this.#nextRenderTime) / this.#renderIntervalMilliseconds) + 1;
+        this.#nextRenderTime += elapsedDeadlines * this.#renderIntervalMilliseconds;
+      }
     }
-    this.#renderer.clear(true, true, true);
-    this.#renderer.render(this.#scene, this.#camera);
     if (this.#state.status === "finished" && this.#matchStarted) {
       this.#matchStarted = false;
       this.#renderer.setAnimationLoop(null);
@@ -429,7 +467,16 @@ export class Game {
       });
       remote.pendingAbilities = [];
     }
-    const result = stepSimulation(this.#state, inputs, FIXED_STEP_SECONDS, this.#physicsRuntime);
+    if (this.#simulationRuntime === null) {
+      throw new Error("Guest games cannot own a simulation runtime");
+    }
+    const result = stepSimulation(
+      this.#state,
+      inputs,
+      FIXED_STEP_SECONDS,
+      this.#physicsRuntime,
+      this.#simulationRuntime,
+    );
     this.#state = result.state;
     this.#hostTick += 1;
     result.events.forEach((event) => this.#handleEvent(event));
@@ -500,15 +547,17 @@ export class Game {
   /** guest：driver 收到 unreliable 增量快照时合并进渲染 state。 */
   applyDelta(delta: StateDeltaSnapshot): void {
     this.#state = applyDeltaToState(this.#state, delta);
+    delta.changedObjects.forEach((object) => this.#guestDirtyObjectIds.add(object.id));
     this.#worldRevision = delta.worldRevision;
-    this.#sceneDirty = true;
   }
 
   /** guest：driver 收到可靠 checkpoint 后，从初始基线重建世界。 */
   applyCheckpoint(checkpoint: FullStateCheckpoint): void {
     this.#state = applyCheckpointToState(this.#initialState, checkpoint);
     this.#worldRevision = checkpoint.worldRevision;
-    this.#sceneDirty = true;
+    this.#guestDirtyObjectIds.clear();
+    this.#fullObjectSyncPending = true;
+    this.#forceRender = true;
   }
 
   /** guest 本地 worldRevision，driver 据此与 delta.baseWorldRevision 比对决定是否 resync。 */
@@ -690,10 +739,12 @@ export class Game {
 
   #syncScene(deltaSeconds: number): void {
     this.#holeRenderer.sync(this.#state.holes, this.#state.elapsed, deltaSeconds, this.#leaderId);
+    const changedObjects = this.#takeChangedObjectsForRender();
 
     const player = this.#state.holes.find((hole) => hole.id === this.#localPlayerId);
     if (!player) {
-      this.#cityObjects.sync(this.#state.objects, deltaSeconds);
+      this.#cityObjects.sync(changedObjects, deltaSeconds);
+      this.#fullObjectSyncPending = false;
       return;
     }
     this.#cameraTarget.set(player.position.x, 0, player.position.y);
@@ -716,10 +767,11 @@ export class Game {
     this.#camera.up.set(0, doubleFoot ? 0 : 1, doubleFoot ? -1 : 0);
     this.#camera.lookAt(this.#cameraTarget);
     this.#camera.updateMatrixWorld();
-    this.#cityObjects.sync(this.#state.objects, deltaSeconds, {
+    this.#cityObjects.sync(changedObjects, deltaSeconds, {
       player,
       cameraPosition: this.#camera.position,
     });
+    this.#fullObjectSyncPending = false;
     this.#powerUpRenderer.sync(
       this.#state.powerUps,
       this.#state.footprints,
@@ -730,6 +782,27 @@ export class Game {
       this.#viewportHeight,
     );
     this.#updateOpponentIndicators(player);
+  }
+
+  #takeChangedObjectsForRender(): readonly WorldObjectState[] {
+    if (this.#fullObjectSyncPending) {
+      this.#simulationRuntime?.takeDirtyObjects();
+      this.#guestDirtyObjectIds.clear();
+      return this.#state.objects;
+    }
+    if (this.#simulationRuntime !== null) {
+      return this.#simulationRuntime.takeDirtyObjects();
+    }
+    const changedObjects: WorldObjectState[] = [];
+    for (const objectId of this.#guestDirtyObjectIds) {
+      const index = this.#objectIndexById.get(objectId);
+      const object = index === undefined ? undefined : this.#state.objects[index];
+      if (object !== undefined) {
+        changedObjects.push(object);
+      }
+    }
+    this.#guestDirtyObjectIds.clear();
+    return changedObjects;
   }
 
   #updateOpponentIndicators(player: HoleState): void {
@@ -1050,11 +1123,13 @@ export class Game {
   readonly #onVisibilityChange = (): void => {
     this.#pageVisible = document.visibilityState !== "hidden";
     if (this.#pageVisible) {
-      this.#sceneDirty = true;
+      this.#forceRender = true;
+      this.#nextRenderTime = performance.now();
+      this.#renderDeltaAccumulator = 0;
       if (this.#matchStarted) {
         this.#renderer.setAnimationLoop(this.#frame);
       } else {
-        this.#frame(this.#lastTime);
+        this.#frame(performance.now());
       }
     } else {
       this.#renderer.setAnimationLoop(null);
@@ -1071,6 +1146,7 @@ export class Game {
     requestAnimationFrame(() => {
       this.#resizePending = false;
       this.#applyResize();
+      this.#forceRender = true;
     });
   };
 

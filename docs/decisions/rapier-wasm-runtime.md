@@ -16,13 +16,14 @@
   - <https://rapier.rs/docs/user_guides/javascript/collider_friction/>
   - <https://rapier.rs/docs/user_guides/javascript/collider_restitution/>
   - <https://rapier.rs/docs/user_guides/javascript/integration_parameters/>
+- 官方 JavaScript API 提供 `ColliderDesc.trimesh(vertices, indices)` 与 `Collider.setShape(shape)`；洞缘使用这两个 API 合并固定碰撞体并原地更新半径。
 
 ## 决策
 
 - offline 和 host 在异步创建 `Game` 时创建一份 `SimulationPhysicsRuntime`；guest 不创建 runtime。
 - 浏览器开发和生产环境均加载独立 `.wasm` 资源，不使用 base64 compat 包。
 - runtime 是显式传入 `stepSimulation` 的可丢弃派生缓存，不是权威状态。全部刚体状态每步写回 `SimulationState`，runtime 可从该状态重建。
-- 每个洞口独立复用一个 Rapier `World`、96 段固定洞缘 collider 和当前活跃刚体；洞半径变化时只重建该洞的 world。
+- 每个洞口独立复用一个 Rapier `World`、一个 96 段精度的闭合环形 trimesh collider 和当前活跃刚体；洞半径变化时只替换 collider shape，不重建 world、固定地面刚体或活跃刚体。
 - 游戏销毁时调用 `World.free()`；禁止模块全局保存对局 world。
 - 保持现有物理常量、形状尺寸、碰撞参与关系、吞噬阈值、车辆旁路与协议不变。
 

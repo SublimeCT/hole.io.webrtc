@@ -107,7 +107,6 @@ AGENTS.md                    # 本文件
 
 推荐建立以下 skills（内容随项目推进逐步补充，不要求一开始就写满）：
 
-- **`threejs-scene`**：场景搭建/资源管理约定——几何体和材质如何复用避免每帧 `new`、glTF 加载与释放、LOD 使用时机、drawcall 合并、禁止在渲染循环里做的操作清单。
 - **`webrtc-protocol`**：DataChannel 建连流程、reliable/unreliable channel 的选用场景、协议字段改动时必须同步修改的位置清单（对应第 3 节的单一真源规则）、host 权威循环的写法约定。
 - **`react-zustand-ui`**：UI 层和 game 层的边界在哪、store 拆分粒度、哪些状态该进 zustand 哪些该是组件内部 state。
 - **`drizzle-postgres`**：schema 变更流程、migration 写法、存档相关表的事件化写入模式（对应第 4 节）。
