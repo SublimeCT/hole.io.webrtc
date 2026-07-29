@@ -85,8 +85,22 @@ describe("signaling websocket", () => {
     const guestEntered = receive(guest);
     const hostJoinedState = receive(host);
     send(guest, { type: "enter-room", roomCode: room.roomCode, profile: profile("Guest") });
-    expect(await guestEntered).toMatchObject({ type: "room-entered" });
+    const entered = await guestEntered;
+    expect(entered).toMatchObject({ type: "room-entered" });
     await hostJoinedState;
+
+    const lobbyHostSignal = receive(host);
+    send(guest, {
+      type: "signal-offer",
+      toPeerId: (entered.room as { peers: { peerId: string; isHost: boolean }[] }).peers.find(
+        (peer) => peer.isHost,
+      )?.peerId,
+      description: { sdp: "lobby-offer-sdp" },
+    });
+    expect(await lobbyHostSignal).toMatchObject({
+      type: "signal-offer",
+      description: { sdp: "lobby-offer-sdp" },
+    });
 
     let guestState = receive(guest);
     let hostState = receive(host);
@@ -144,6 +158,29 @@ describe("signaling websocket", () => {
     send(socket, { type: "heartbeat", clientTime: 1, injected: true });
     expect(await error).toMatchObject({ type: "room-error", code: "INVALID_MESSAGE" });
     socket.close();
+  });
+
+  it("returns a structured access error for blocked IP addresses", async () => {
+    const blockedIp = "203.0.113.50";
+    await app.persistence.saveIpAccess({
+      ip: blockedIp,
+      consecutiveMisses: 0,
+      totalMisses: 10,
+      blockedUntil: null,
+      permanentlyBlocked: true,
+      updatedAt: Date.now(),
+    });
+    const response = await app.inject({
+      method: "GET",
+      url: "/access-status",
+      remoteAddress: blockedIp,
+    });
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toMatchObject({
+      code: "ACCESS_BLOCKED",
+      permanent: true,
+      retryAt: null,
+    });
   });
 
   it("returns a specific error when a player name is already used in the room", async () => {

@@ -18,7 +18,18 @@ const securityPlugin: FastifyPluginAsync<SecurityOptions> = async (app, opts) =>
   app.addHook("onRequest", async (request, reply) => {
     const decision = await accessService.check(request.ip);
     if (!decision.allowed) {
-      await reply.code(403).send({ error: "access blocked", statusCode: 403 });
+      if (decision.retryAt !== null) {
+        reply.header("retry-after", Math.max(1, Math.ceil((decision.retryAt - opts.now()) / 1000)));
+      }
+      await reply.code(403).send({
+        code: "ACCESS_BLOCKED",
+        message: decision.permanent
+          ? "network address is permanently blocked"
+          : "network address is temporarily blocked",
+        permanent: decision.permanent,
+        retryAt: decision.retryAt,
+        statusCode: 403,
+      });
     }
   });
 };

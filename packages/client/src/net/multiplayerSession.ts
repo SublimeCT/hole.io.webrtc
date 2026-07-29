@@ -12,13 +12,11 @@ import { StarConnectionManager, type GameChannelKind } from "./starConnection";
 export interface MultiplayerSessionOptions {
   profile: PlayerProfile;
   requestedRoomCode: RoomCode | null;
-  onRoomCode(roomCode: RoomCode): void;
 }
 
 export class MultiplayerSession {
   private readonly signaling: SignalingClient;
   private readonly peerConnections: StarConnectionManager;
-  private readonly onRoomCode: (roomCode: RoomCode) => void;
   private profile: PlayerProfile;
   private requestedRoomCode: RoomCode | null;
   private disposed = false;
@@ -30,7 +28,6 @@ export class MultiplayerSession {
   constructor(options: MultiplayerSessionOptions) {
     this.profile = options.profile;
     this.requestedRoomCode = options.requestedRoomCode;
-    this.onRoomCode = options.onRoomCode;
     this.signaling = new SignalingClient({
       url: resolveSignalingUrl(),
       onMessage: (message) => void this.handleMessage(message),
@@ -146,27 +143,15 @@ export class MultiplayerSession {
       case "room-entered":
         this.requestedRoomCode = message.room.roomCode;
         multiplayerStore.getState().setRoom(message.room, message.turn);
-        this.onRoomCode(message.room.roomCode);
+        await this.syncPeerConnections(message.room, message.turn);
         return;
       case "room-state":
-        if (
-          message.room.status === "lobby" &&
-          multiplayerStore.getState().room?.status === "connecting"
-        ) {
-          this.peerConnections.close();
-          multiplayerStore.getState().clearPeerConnections();
-        }
         multiplayerStore.getState().setRoom(message.room);
+        await this.syncPeerConnections(message.room);
         return;
       case "connection-started": {
         multiplayerStore.getState().setRoom(message.room);
-        const state = multiplayerStore.getState();
-        if (state.peerId === null || state.turn === null) {
-          state.setError("缺少 WebRTC 身份或 TURN 配置");
-          return;
-        }
-        state.clearPeerConnections();
-        await this.peerConnections.begin(message.room, state.peerId, state.turn);
+        await this.syncPeerConnections(message.room);
         return;
       }
       case "signal-offer":
@@ -199,6 +184,23 @@ export class MultiplayerSession {
         return;
       case "room-error":
         multiplayerStore.getState().setError(roomErrorMessage(message.code));
+    }
+  }
+
+  private async syncPeerConnections(
+    room: Extract<ServerToClientMessage, { type: "room-state" }>["room"],
+    turnOverride?: Extract<ServerToClientMessage, { type: "room-entered" }>["turn"],
+  ): Promise<void> {
+    const state = multiplayerStore.getState();
+    const turn = turnOverride ?? state.turn;
+    if (state.peerId === null || turn === null) {
+      state.setError("缺少 WebRTC 身份或 TURN 配置");
+      return;
+    }
+    try {
+      await this.peerConnections.sync(room, state.peerId, turn);
+    } catch (error: unknown) {
+      state.setError(error instanceof Error ? error.message : "WebRTC 连接测试失败");
     }
   }
 }

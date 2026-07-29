@@ -69,19 +69,19 @@
 
 ## 联机模式
 
-| 项           | 值                                                                                                                                                                                                                        | 状态                   |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------- |
-| 架构         | Host 唯一权威模拟和广播；每个 guest 只连接 host 的 WebRTC 星型拓扑                                                                                                                                                        | 🚧 后端/协议已实现     |
-| 权威边界     | guest 只发输入与技能意图；位置、分数、体积、吞噬、死亡、道具、技能、等级、经验和建筑状态全部由 host 运行共享 simulation 计算                                                                                              | ✅ 协议已实现          |
-| 玩家         | 每房最多 `5` 人；联机禁止 Bot 和断线 Bot 接管                                                                                                                                                                             | ✅ 决策已定            |
-| 建连流程     | WSS 建房/入房/ready → connecting 中交换 SDP/ICE → host 确认全部 reliable/unreliable DataChannel 后 start-match                                                                                                            | ✅ 已实现              |
-| 打洞失败兜底 | coturn STUN/TURN，auth-secret 临时凭据                                                                                                                                                                                    | ✅ 后端/基础设施已实现 |
-| 输入/快照    | guest 输入约 `30Hz`；host 增量快照约 `10Hz`                                                                                                                                                                               | ✅ 已实现              |
-| Host 掉线    | 任一房间状态 application heartbeat 超过 `8s`，立即结束对局并解散房间；v1 不迁移 host                                                                                                                                      | ✅ 后端已实现          |
-| 反作弊       | 不在 host 机器运行反作弊；接受 P2P host 的结构性作弊风险                                                                                                                                                                  | ✅ 决策已定            |
-| 房间页面     | `#/online` 无 room 参数时建房，`?room=XXXXXX` 时入房；显示真实 roster、ready、WSS 延迟、星型连接进度、可复制邀请链接和资料设置；房间内玩家名称按 NFKC 后不区分大小写且不可重复；局后自动重新 enter-room；不再包含模拟玩家 | ✅ 已接入信令与建连    |
-| 对局退出     | 联机游戏中返回主页前必须确认；确认后通过 WSS `leave-room` 正常退房并销毁本地会话，再次进入联机必须创建新会话                                                                                                              | ✅ 已实现              |
-| Guest 启动   | 路由切换期间提前到达的 reliable 游戏消息由联机会话暂存，游戏处理器注册后按序回放；`match-start` 不得因页面懒加载而丢失                                                                                                    | ✅ 已实现              |
+| 项           | 值                                                                                                                                                                                                                                                                                                                                                                                          | 状态                   |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------- |
+| 架构         | Host 唯一权威模拟和广播；每个 guest 只连接 host 的 WebRTC 星型拓扑                                                                                                                                                                                                                                                                                                                          | 🚧 后端/协议已实现     |
+| 权威边界     | guest 只发输入与技能意图；位置、分数、体积、吞噬、死亡、道具、技能、等级、经验和建筑状态全部由 host 运行共享 simulation 计算                                                                                                                                                                                                                                                                | ✅ 协议已实现          |
+| 玩家         | 每房最多 `5` 人；联机禁止 Bot 和断线 Bot 接管                                                                                                                                                                                                                                                                                                                                               | ✅ 决策已定            |
+| 建连流程     | 玩家进入 lobby 后立即在 host↔guest 间交换 SDP/ICE 并建立 reliable/unreliable DataChannel；已连通玩家与房主间显示实线闪烁光晕；全员 ready 后进入 connecting 并复用已建立连接，host 确认全部通道后 start-match                                                                                                                                                                                | ✅ 已实现              |
+| 打洞失败兜底 | coturn STUN/TURN，auth-secret 临时凭据                                                                                                                                                                                                                                                                                                                                                      | ✅ 后端/基础设施已实现 |
+| 输入/快照    | guest 输入约 `30Hz`；host 增量快照约 `10Hz`                                                                                                                                                                                                                                                                                                                                                 | ✅ 已实现              |
+| Host 掉线    | 任一房间状态 application heartbeat 超过 `8s`，立即结束对局并解散房间；v1 不迁移 host                                                                                                                                                                                                                                                                                                        | ✅ 后端已实现          |
+| 反作弊       | 不在 host 机器运行反作弊；接受 P2P host 的结构性作弊风险                                                                                                                                                                                                                                                                                                                                    | ✅ 决策已定            |
+| 房间页面     | `#/online` 无 room 参数时建房且 host URL 不追加房间码，`?room=XXXXXX` 时入房；未持久化有效玩家名称时先强制打开设置、完成后才连接房间，强制设置状态仍可退出并返回主页；显示真实 roster、ready、WSS 延迟、星型连接进度、可复制邀请链接和资料设置；房间内玩家名称按 NFKC 后不区分大小写且不可重复；重复颜色会强制本机玩家在禁用已占用色的色板中改选；局后自动重新 enter-room；不再包含模拟玩家 | ✅ 已接入信令与建连    |
+| 对局退出     | 联机游戏中返回主页前必须确认；确认后通过 WSS `leave-room` 正常退房并销毁本地会话，再次进入联机必须创建新会话                                                                                                                                                                                                                                                                                | ✅ 已实现              |
+| Guest 启动   | 路由切换期间提前到达的 reliable 游戏消息由联机会话暂存，游戏处理器注册后按序回放；`match-start` 不得因页面懒加载而丢失                                                                                                                                                                                                                                                                      | ✅ 已实现              |
 
 ## 联机协议
 
@@ -91,11 +91,11 @@
 
 `lobby → connecting → playing → lobby`，房间可循环多局：
 
-| 状态         | 服务端行为                                                                                                   |
-| ------------ | ------------------------------------------------------------------------------------------------------------ |
-| `lobby`      | 从建房或上一局结束开始 `180s` 倒计时；所有 entered 玩家 ready 后 host 才能开始建连；超时销毁房间             |
-| `connecting` | 最长 `30s`；只转发 host↔guest SDP/ICE；超时退回 lobby、清空 ready 并重启 `180s` 倒计时                       |
-| `playing`    | 固定 `180s`；WSS 保持，客户端消息仅接受 heartbeat 和主动 `leave-room`；计时结束后所有人必须重新 `enter-room` |
+| 状态         | 服务端行为                                                                                                                                                      |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `lobby`      | 从建房或上一局结束开始 `180s` 倒计时；玩家进入后立即允许 host↔guest SDP/ICE 以测试并预建连接；所有 entered 玩家 ready 后 host 才能进入 connecting；超时销毁房间 |
+| `connecting` | 最长 `30s`；继续允许 host↔guest SDP/ICE 并复用 lobby 已建立的 DataChannel；超时退回 lobby、清空 ready 并重启 `180s` 倒计时                                      |
+| `playing`    | 固定 `180s`；WSS 保持，客户端消息仅接受 heartbeat 和主动 `leave-room`；计时结束后所有人必须重新 `enter-room`                                                    |
 
 客户端每 `4s` 发送 application heartbeat。任一 guest 超过 `8s` 只被移出；host 超过 `8s` 解散房间。全局最多 `20` 个活跃房间。
 
@@ -124,11 +124,11 @@
 | match-started / match-ended               | 服务端固定对局计时和重新入房截止时间     |
 | room-closed / heartbeat-ack / room-error  | 生命周期、心跳和统一错误                 |
 
-房间码为 `^[A-HJ-NP-Z2-9]{6}$`。有效格式但不存在的房间尝试按真实客户端 IP 记录：连续 `5` 次临时封禁全部访问 `5m`，累计 `10` 次永久封禁；成功进入真实房间只重置连续次数。不可用、已满或非 lobby 对外统一 `ROOM_UNAVAILABLE`，不暴露房间枚举信息。所有 WSS message 使用 strict runtime schema，禁止额外字段；用户名为 NFKC 后 `2–10` 个 Unicode code point，颜色为 `#RRGGBB`，语言为项目十种 i18n 枚举，平台字符受限且最长 `20`。
+房间码为 `^[A-HJ-NP-Z2-9]{6}$`。有效格式但不存在的房间尝试按真实客户端 IP 记录：连续 `5` 次临时封禁全部访问 `5m`，累计 `10` 次永久封禁；成功进入真实房间只重置连续次数。封禁期间 HTTP access 预检返回 `ACCESS_BLOCKED`、永久标识和临时封禁截止时间，联机页据此持续显示永久封禁或剩余分钟提示。不可用、已满或非 lobby 对外统一 `ROOM_UNAVAILABLE`，不暴露房间枚举信息。所有 WSS message 使用 strict runtime schema，禁止额外字段；用户名为 NFKC 后 `2–10` 个 Unicode code point，颜色为 `#RRGGBB`，语言为项目十种 i18n 枚举，平台字符受限且最长 `20`。
 
 ### TURN 中继
 
-打洞失败走 coturn auth-secret 临时凭据。server 在建房/入房结果中返回 `turn { username, credential, ttl, uris }`；coturn 验证 STUN/TURN 协议和认证，DTLS 内的游戏消息由 peer 端共享协议校验。Ubuntu 部署流程见 `docs/deployment-ubuntu.md`。
+打洞失败走 coturn auth-secret 临时凭据。server 在建房/入房结果中返回 `turn { username, credential, ttl, uris }`；coturn 验证 STUN/TURN 协议和认证，DTLS 内的游戏消息由 peer 端共享协议校验。部署流程见 `docs/deploy.md`。
 
 ### P2P 星型拓扑
 
@@ -162,7 +162,7 @@
 | application heartbeat / 超时 | `4s` / `>8s`   |
 | WS 单包上限                  | `128KB`        |
 
-后端使用 PostgreSQL（用户和数据库名均为 `holeio`）+ `pg` 连接池 + Drizzle migration；只持久化房间、对局/玩家统计骨架和 IP 封禁，不保存高频帧。配置优先级为 `process.env > .env.local > .env`，数据库密码、连接串和 TURN secret 不入库。
+后端使用 PostgreSQL（用户和数据库名均为 `holeio`）+ `pg` 连接池 + Drizzle migration；只持久化房间、对局/玩家统计骨架和 IP 封禁，不保存高频帧。配置优先级为 `process.env > .env.local > .env`，数据库密码、连接串和 TURN secret 不入库。GitHub Actions 构建前后端并通过 SSH + rsync 上传到固定目录，随后重启 systemd；migration 由服务的 `ExecStartPre` 执行。
 
 ## 地图系统
 

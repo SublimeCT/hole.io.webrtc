@@ -64,7 +64,7 @@ describe("RoomService", () => {
     expect(service.getRoom(created.value.code)).toBeUndefined();
   });
 
-  it("allows signaling only between host and guest during connecting", async () => {
+  it("allows host and guest signaling in lobby for immediate connection checks", async () => {
     const service = new RoomService(new MemoryPersistence(), () => 1_000);
     const host = "host" as PeerId;
     const guestA = "guest-a" as PeerId;
@@ -74,6 +74,13 @@ describe("RoomService", () => {
     if (!created.ok) return;
     service.enterRoom(created.value.code, guestA, profile("Guest A"));
     service.enterRoom(created.value.code, guestB, profile("Guest B"));
+    expect(service.signalTarget(host, guestA).ok).toBe(true);
+    expect(service.signalTarget(guestA, host).ok).toBe(true);
+    expect(service.signalTarget(guestA, guestB)).toEqual({
+      ok: false,
+      error: "SIGNAL_NOT_ALLOWED",
+    });
+
     service.setReady(host, true);
     service.setReady(guestA, true);
     service.setReady(guestB, true);

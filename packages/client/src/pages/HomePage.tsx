@@ -278,7 +278,7 @@ export function HomePage() {
         await shareGame();
         return;
       case "online":
-        navigate("/online");
+        navigate({ pathname: "/online", search: "" });
         return;
     }
   };

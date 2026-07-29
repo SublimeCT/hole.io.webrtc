@@ -37,27 +37,46 @@ export class StarConnectionManager {
   private hostPeerId: PeerId | null = null;
   private turn: TurnCredentials | null = null;
   private isHost = false;
+  private mayStartMatch = false;
   private hostReadyEmitted = false;
 
   constructor(options: StarConnectionOptions) {
     this.options = options;
   }
 
-  async begin(room: RoomState, localPeerId: PeerId, turn: TurnCredentials): Promise<void> {
-    this.close();
+  async sync(room: RoomState, localPeerId: PeerId, turn: TurnCredentials): Promise<void> {
     this.turn = turn;
     const host = room.peers.find((peer) => peer.isHost && peer.entered);
     if (host === undefined) throw new Error("房间缺少已进入的房主");
+    const hostChanged = this.hostPeerId !== null && this.hostPeerId !== host.peerId;
+    const hostModeChanged =
+      this.hostPeerId !== null && this.isHost !== (host.peerId === localPeerId);
+    if (hostChanged || hostModeChanged) this.close();
     this.hostPeerId = host.peerId;
     this.isHost = host.peerId === localPeerId;
+    this.mayStartMatch = room.status === "connecting";
+    if (room.status === "lobby") this.hostReadyEmitted = false;
 
-    if (!this.isHost) return;
-    this.expectedGuests = new Set(
+    const nextGuests = new Set(
       room.peers.filter((peer) => peer.entered && !peer.isHost).map((peer) => peer.peerId),
     );
-    for (const guestPeerId of this.expectedGuests) {
-      await this.createOffer(guestPeerId);
+    const expectedLinks = this.isHost ? nextGuests : new Set([host.peerId]);
+    for (const [peerId, link] of this.links) {
+      if (expectedLinks.has(peerId)) continue;
+      link.reliable?.close();
+      link.unreliable?.close();
+      link.connection.close();
+      this.links.delete(peerId);
+      this.options.onPeerStatus(peerId, "closed");
     }
+    this.expectedGuests = nextGuests;
+
+    if (this.isHost) {
+      for (const guestPeerId of this.expectedGuests) {
+        if (!this.links.has(guestPeerId)) await this.createOffer(guestPeerId);
+      }
+    }
+    this.checkHostReady();
   }
 
   async handle(message: ServerToClientMessage): Promise<void> {
@@ -86,6 +105,7 @@ export class StarConnectionManager {
     this.hostPeerId = null;
     this.turn = null;
     this.isHost = false;
+    this.mayStartMatch = false;
     this.hostReadyEmitted = false;
   }
 
@@ -185,7 +205,9 @@ export class StarConnectionManager {
     });
     connection.addEventListener("connectionstatechange", () => {
       const state = connection.connectionState;
-      if (state === "failed" || state === "disconnected") {
+      if (state === "connected") {
+        this.checkReady(link, peerId);
+      } else if (state === "failed" || state === "disconnected") {
         this.options.onPeerStatus(peerId, "failed");
       } else if (state === "closed") {
         this.options.onPeerStatus(peerId, "closed");
@@ -266,7 +288,18 @@ export class StarConnectionManager {
   private checkReady(link: PeerLink, peerId: PeerId): void {
     if (link.reliable?.readyState !== "open" || link.unreliable?.readyState !== "open") return;
     this.options.onPeerStatus(peerId, "connected");
-    if (!this.isHost || this.hostReadyEmitted || this.expectedGuests.size === 0) return;
+    this.checkHostReady();
+  }
+
+  private checkHostReady(): void {
+    if (
+      !this.isHost ||
+      !this.mayStartMatch ||
+      this.hostReadyEmitted ||
+      this.expectedGuests.size === 0
+    ) {
+      return;
+    }
     for (const expectedPeerId of this.expectedGuests) {
       const expected = this.links.get(expectedPeerId);
       if (expected?.reliable?.readyState !== "open" || expected.unreliable?.readyState !== "open") {

@@ -255,7 +255,7 @@ export class RoomService {
 
   signalTarget(peerId: PeerId, targetPeerId: PeerId): RoomResult<RoomMember> {
     const room = this.roomForPeer(peerId);
-    if (room === undefined || room.status !== "connecting") {
+    if (room === undefined || (room.status !== "lobby" && room.status !== "connecting")) {
       return { ok: false, error: "SIGNAL_NOT_ALLOWED" };
     }
     const source = room.members.get(peerId);

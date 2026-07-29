@@ -6,7 +6,7 @@
 - 全局最多 20 个房间、每房最多 5 名真人；联机 roster 禁止 Bot。
 - lobby 和 connecting 分别为 180 秒、30 秒；playing 固定 180 秒。
 - WebSocket 在对局中保持，客户端每 4 秒发 application heartbeat；超过 8 秒时 guest 移除、host 解散房间。
-- 所有玩家 ready 后 host 才能进入 connecting；SDP/ICE 强制只在 host↔guest 之间转发。
+- guest 进入 lobby 后 host 立即发起 WebRTC 双 DataChannel 探测；SDP/ICE 在 lobby/connecting 中强制只在 host↔guest 之间转发，全员 ready 后进入 connecting 并复用连接。
 - playing 阶段只接受 heartbeat 和主动 `leave-room`，拒绝其他客户端 WSS 消息，游戏数据不经过后端。
 - 6 位去歧义房间码；不存在房间连续 5 次封 5 分钟、累计 10 次永久封禁。
 - TypeBox strict runtime schema 校验全部 WSS 入站消息，并限制 payload、消息速率、待处理队列、发送缓冲、origin 和连接数。
@@ -16,7 +16,7 @@
 - 联机房间页面已接入 WSS：真实房间码、URL 入房、ready、资料更新、4 秒心跳、局后重新入房和错误提示。
 - 客户端严格校验服务端消息；Zustand 负责网络状态到 React UI 的框架无关桥接。
 - host 与每个 guest 建立独立 `RTCPeerConnection`，包含 reliable 和 unordered/unreliable 双 DataChannel；全部通道 open 后才请求 start-match。
-- Ubuntu 生产部署使用 systemd，不使用 Docker；项目发布目录和操作流程见 `docs/deployment-ubuntu.md`。
+- GitHub Actions 构建前后端并通过 SSH + rsync 上传到固定目录，随后重启 systemd；migration 由服务的 `ExecStartPre` 执行。操作流程见 `docs/deploy.md`。
 
 ## 已完成：客户端联机游戏循环
 
@@ -32,6 +32,9 @@
 - `poop-hit` 通过 reliable DataChannel 定向标识被命中的 peer，guest 可触发本机粪便雨表现。
 - 游戏 HUD 左下显示实际渲染 FPS；联机排行榜头像使用各玩家圆环色和名称首字符。
 - 房间服务拒绝 NFKC 后不区分大小写的重复玩家名称，Online 表单同步即时校验。
+- 未持久化有效玩家名称时联机页先强制打开设置且暂不连接；颜色冲突直接打开设置并禁用房间已占用颜色。
+- lobby 连接图按本机可观测的双 DataChannel 状态显示虚线或带闪烁光晕的实线。
+- 被临时或永久封禁的 IP 可通过 `/access-status` 获取结构化 `ACCESS_BLOCKED` 响应，客户端在 WebSocket Upgrade 前显示封禁期限。
 
 ## 已知限制
 

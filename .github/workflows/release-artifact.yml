@@ -1,0 +1,61 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.4.1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck && pnpm test && pnpm build
+
+      - name: Package
+        run: |
+          rm -rf .deploy
+          pnpm --filter @hole-io/server deploy --prod .deploy/server
+          rm -f .deploy/server/package.json .deploy/server/pnpm-lock.yaml .deploy/server/node_modules/.modules.yaml
+          mkdir .deploy/client
+          cp -R packages/client/dist/. .deploy/client/
+
+      - name: Configure SSH
+        env:
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          install -d -m 0700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 0600 ~/.ssh/deploy_key
+
+      - name: Deploy
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          SSH="ssh -i ~/.ssh/deploy_key -p ${DEPLOY_PORT} -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes"
+          rsync -az --delete --delay-updates -e "$SSH" .deploy/ "${DEPLOY_USER}@${DEPLOY_HOST}:/srv/holeio-server-dist/"
+          $SSH "${DEPLOY_USER}@${DEPLOY_HOST}" "sudo -n /usr/bin/systemctl restart holeio-server.service"

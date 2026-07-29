@@ -17,6 +17,7 @@ export class SignalingClient {
   private heartbeatTimer: number | null = null;
   private heartbeatIntervalMs = 4_000;
   private explicitlyClosed = false;
+  private connectAttempt = 0;
 
   constructor(options: SignalingClientOptions) {
     this.options = options;
@@ -26,6 +27,28 @@ export class SignalingClient {
     if (this.socket !== null) return;
     this.explicitlyClosed = false;
     this.options.onStatus("connecting");
+    const attempt = ++this.connectAttempt;
+    void this.checkAccessAndConnect(attempt);
+  }
+
+  private async checkAccessAndConnect(attempt: number): Promise<void> {
+    try {
+      const accessUrl = new URL(this.options.url);
+      accessUrl.protocol = accessUrl.protocol === "wss:" ? "https:" : "http:";
+      accessUrl.pathname = "/access-status";
+      accessUrl.search = "";
+      accessUrl.hash = "";
+      const response = await fetch(accessUrl, { headers: { accept: "application/json" } });
+      if (response.status === 403) {
+        const payload: unknown = await response.json().catch(() => null);
+        this.options.onStatus("error");
+        this.options.onProtocolError(accessBlockedMessage(payload));
+        return;
+      }
+    } catch {
+      // Older deployments may not expose the preflight endpoint; WebSocket remains the fallback.
+    }
+    if (this.explicitlyClosed || attempt !== this.connectAttempt) return;
     const socket = new WebSocket(this.options.url);
     this.socket = socket;
 
@@ -47,6 +70,7 @@ export class SignalingClient {
 
   close(sendLeave: boolean): void {
     this.explicitlyClosed = true;
+    this.connectAttempt += 1;
     this.stopHeartbeat();
     const socket = this.socket;
     if (socket === null) return;
@@ -95,6 +119,18 @@ export class SignalingClient {
     window.clearInterval(this.heartbeatTimer);
     this.heartbeatTimer = null;
   }
+}
+
+function accessBlockedMessage(payload: unknown): string {
+  if (typeof payload !== "object" || payload === null) return "当前网络地址已被服务器封禁";
+  if ("permanent" in payload && payload.permanent === true) {
+    return "当前网络地址已被永久封禁，请联系管理员解除";
+  }
+  if ("retryAt" in payload && typeof payload.retryAt === "number") {
+    const remainingMinutes = Math.max(1, Math.ceil((payload.retryAt - Date.now()) / 60_000));
+    return `当前网络地址暂时被封禁，请在 ${remainingMinutes} 分钟后重试`;
+  }
+  return "当前网络地址暂时被封禁，请稍后重试";
 }
 
 export function resolveSignalingUrl(): string {

@@ -55,6 +55,8 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
       : { ...signalingOptions, sweepIntervalMs: opts.sweepIntervalMs },
   );
 
+  app.get("/access-status", async () => ({ allowed: true }));
+
   app.get("/health", async (_request, reply) => {
     const database = await app.persistence.health();
     if (!database) reply.code(503);

@@ -210,6 +210,14 @@
     online-flow 800ms 1.08s linear infinite;
 }
 
+.online-connections line.is-connected {
+  stroke-width: 0.42;
+  stroke-dasharray: none;
+  opacity: 0.95;
+  filter: drop-shadow(0 0 1px currentcolor) drop-shadow(0 0 4px currentcolor);
+  animation: online-link-glow 1.35s ease-in-out infinite;
+}
+
 .online-hole {
   --online-hole-size: clamp(96px, min(24vw, 37vh), 420px);
   position: absolute;
@@ -518,6 +526,13 @@
   color: oklch(84% 0.15 45);
 }
 
+.online-settings-error {
+  margin: -6px 0 18px;
+  color: oklch(84% 0.15 45);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .online-modal h2 {
   margin-bottom: 18px;
   font-family: var(--font-display);
@@ -684,6 +699,13 @@
 @keyframes online-flow {
   to {
     stroke-dashoffset: -2.7;
+  }
+}
+
+@keyframes online-link-glow {
+  50% {
+    opacity: 0.62;
+    filter: drop-shadow(0 0 2px currentcolor) drop-shadow(0 0 8px currentcolor);
   }
 }
 

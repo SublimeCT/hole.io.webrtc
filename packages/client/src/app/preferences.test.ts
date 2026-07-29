@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { getDefaultRenderFrameRate, loadPreferences } from "./preferences";
+import { getDefaultRenderFrameRate, hasPersistedPlayerName, loadPreferences } from "./preferences";
 
 const PREFERENCES_KEY = "hole-city-player-preferences";
 
@@ -57,5 +57,18 @@ describe("render frame rate preferences", () => {
     });
 
     expect(loadPreferences().renderFrameRate).toBe(60);
+  });
+});
+
+describe("persisted player profile", () => {
+  it("requires a deliberately saved valid player name before online play", () => {
+    vi.stubGlobal("localStorage", { getItem: vi.fn(() => null), setItem: vi.fn() });
+    expect(hasPersistedPlayerName()).toBe(false);
+
+    stubSavedPreferences({ playerName: "测试玩家" });
+    expect(hasPersistedPlayerName()).toBe(true);
+
+    stubSavedPreferences({ playerName: " " });
+    expect(hasPersistedPlayerName()).toBe(false);
   });
 });

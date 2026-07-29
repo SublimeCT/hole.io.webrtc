@@ -14,7 +14,7 @@ import {
 } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useStore } from "zustand";
-import { loadPreferences, persistPreferences } from "../app/preferences";
+import { hasPersistedPlayerName, loadPreferences, persistPreferences } from "../app/preferences";
 import { createPlayerProfile } from "../net/multiplayerSession";
 import { useMultiplayer } from "../net/MultiplayerProvider";
 import { multiplayerStore } from "../store/multiplayerStore";
@@ -150,8 +150,12 @@ export function OnlineRoomPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const [preferences, setPreferences] = useState(() => loadPreferences());
+  const [profileReady, setProfileReady] = useState(() => hasPersistedPlayerName());
   const [initialRoomCode] = useState(() => requestedRoomCode(location.search));
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(!profileReady);
+  const [settingsError, setSettingsError] = useState(
+    profileReady ? "" : "进入联机前，请先设置玩家名称。",
+  );
   const [draftName, setDraftName] = useState(preferences.playerName);
   const [draftColor, setDraftColor] = useState(preferences.playerRingColor);
   const [toast, setToast] = useState("");
@@ -187,6 +191,22 @@ export function OnlineRoomPage() {
   const connectedRtcPeers = Object.values(peerConnections).filter(
     (status) => status === "connected",
   ).length;
+  const hostPeer = enteredPlayers.find((peer) => peer.isHost) ?? null;
+  const colorConflictMessage = (() => {
+    if (localPeer === null || localPeer.isHost) return null;
+    const other = enteredPlayers.find(
+      (peer) =>
+        peer.peerId !== localPeer.peerId &&
+        peer.profile.color.toUpperCase() === localPeer.profile.color.toUpperCase(),
+    );
+    return other === undefined
+      ? null
+      : `你的颜色与玩家「${other.profile.playerName}」相同，请选择其他颜色。`;
+  })();
+  const draftColorOccupied = enteredPlayers.some(
+    (peer) =>
+      peer.peerId !== peerId && peer.profile.color.toUpperCase() === draftColor.toUpperCase(),
+  );
 
   const showToast = useCallback((message: string): void => {
     setToast(message);
@@ -196,19 +216,16 @@ export function OnlineRoomPage() {
 
   const leaveRoom = useCallback((): void => {
     disposeSession();
-    navigate("/");
+    navigate({ pathname: "/", search: "" }, { replace: true });
   }, [disposeSession, navigate]);
 
   useEffect(() => {
-    if (session !== null) return;
+    if (session !== null || !profileReady) return;
     ensureSession({
       roomCode: initialRoomCode,
       profile: initialProfile.current,
-      onRoomCode: (roomCode) => {
-        navigate({ pathname: "/online", search: `?room=${roomCode}` }, { replace: true });
-      },
     });
-  }, [session, ensureSession, initialRoomCode, navigate]);
+  }, [session, ensureSession, initialRoomCode, profileReady]);
 
   useEffect(() => {
     if (room?.status === "playing") navigate("/game", { replace: true });
@@ -221,19 +238,33 @@ export function OnlineRoomPage() {
   useEffect(() => {
     if (connectionError) {
       showToast(connectionError);
-      if (connectionError === "该玩家名称已被使用，请更换名称") setSettingsOpen(true);
+      if (connectionError === "该玩家名称已被使用，请更换名称") {
+        setSettingsError(connectionError);
+        setSettingsOpen(true);
+      }
     }
   }, [connectionError, showToast]);
 
   useEffect(() => {
+    if (colorConflictMessage === null) return;
+    setDraftColor(localPeer?.profile.color ?? preferences.playerRingColor);
+    setSettingsError(colorConflictMessage);
+    setSettingsOpen(true);
+  }, [colorConflictMessage, localPeer?.profile.color, preferences.playerRingColor]);
+
+  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key !== "Escape") return;
-      if (settingsOpen) setSettingsOpen(false);
-      else leaveRoom();
+      if (settingsOpen) {
+        if (profileReady && colorConflictMessage === null) setSettingsOpen(false);
+        else leaveRoom();
+        return;
+      }
+      leaveRoom();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [leaveRoom, settingsOpen]);
+  }, [colorConflictMessage, leaveRoom, profileReady, settingsOpen]);
 
   useEffect(() => {
     return () => {
@@ -281,6 +312,10 @@ export function OnlineRoomPage() {
       nameInput.current?.reportValidity();
       return;
     }
+    if (draftColorOccupied) {
+      setSettingsError("该颜色已被房间内其他玩家使用，请选择可用颜色。");
+      return;
+    }
     const nextPreferences = { ...preferences, playerName: name, playerRingColor: draftColor };
     const profile = createPlayerProfile({
       playerName: name,
@@ -290,7 +325,10 @@ export function OnlineRoomPage() {
     });
     setPreferences(nextPreferences);
     persistPreferences(nextPreferences);
-    session?.updateProfile(profile);
+    initialProfile.current = profile;
+    setProfileReady(true);
+    if (session !== null) session.updateProfile(profile);
+    setSettingsError("");
     setSettingsOpen(false);
     showToast("玩家设置已同步，准备状态已重置");
   };
@@ -303,6 +341,7 @@ export function OnlineRoomPage() {
     hasDuplicateColor,
     matchId,
     connectedRtcPeers,
+    connectionError,
   });
   const actionLabel = primaryActionLabel(room?.status ?? null, localPeer);
   const actionDisabled =
@@ -310,30 +349,6 @@ export function OnlineRoomPage() {
     localPeer === null ||
     room.status !== "lobby" ||
     (localPeer.isHost && (!allReady || hasDuplicateColor));
-
-  // 颜色冲突本地判定：与房主同色或与另一非房主玩家同色时，提示「本机玩家」修改；房主不弹。
-  const colorConflictMessage = (() => {
-    if (localPeer === null || localPeer.isHost) return null;
-    const localColor = localPeer.profile.color.toUpperCase();
-    const host = enteredPlayers.find((peer) => peer.isHost);
-    if (host !== undefined && host.profile.color.toUpperCase() === localColor) {
-      return "你的颜色与房主相同，请修改颜色后再开始";
-    }
-    const other = enteredPlayers.find(
-      (peer) =>
-        !peer.isHost &&
-        peer.peerId !== localPeer.peerId &&
-        peer.profile.color.toUpperCase() === localColor,
-    );
-    if (other !== undefined) {
-      return `你的颜色与玩家「${other.profile.playerName}」相同，请修改颜色后再开始`;
-    }
-    return null;
-  })();
-  const [colorModalOpen, setColorModalOpen] = useState(false);
-  useEffect(() => {
-    if (colorConflictMessage !== null) setColorModalOpen(true);
-  }, [colorConflictMessage]);
 
   return (
     <main className="online-room">
@@ -426,17 +441,25 @@ export function OnlineRoomPage() {
             preserveAspectRatio="none"
             aria-hidden="true"
           >
-            {players.slice(1).map((player, index) => (
-              <line
-                key={player.id}
-                x1="50"
-                y1="50"
-                x2={positions[index + 1]?.x}
-                y2={positions[index + 1]?.y}
-                stroke={player.color}
-                style={{ color: player.color }}
-              />
-            ))}
+            {players.slice(1).map((player, index) => {
+              const connected = localPeer?.isHost
+                ? peerConnections[player.id] === "connected"
+                : player.id === peerId &&
+                  hostPeer !== null &&
+                  peerConnections[hostPeer.peerId] === "connected";
+              return (
+                <line
+                  className={connected ? "is-connected" : ""}
+                  key={player.id}
+                  x1="50"
+                  y1="50"
+                  x2={positions[index + 1]?.x}
+                  y2={positions[index + 1]?.y}
+                  stroke={player.color}
+                  style={{ color: player.color }}
+                />
+              );
+            })}
           </svg>
           {players.map((player, index) => {
             const position = positions[index] ?? { x: 50, y: 50 };
@@ -521,7 +544,13 @@ export function OnlineRoomPage() {
           className="online-modal-bg"
           role="presentation"
           onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setSettingsOpen(false);
+            if (
+              event.target === event.currentTarget &&
+              profileReady &&
+              colorConflictMessage === null
+            ) {
+              setSettingsOpen(false);
+            }
           }}
         >
           <form
@@ -532,6 +561,7 @@ export function OnlineRoomPage() {
             onSubmit={saveSettings}
           >
             <h2>设置</h2>
+            {settingsError ? <p className="online-settings-error">{settingsError}</p> : null}
             <div className="online-field">
               <label htmlFor="online-player-name">玩家名称（2–10 字）</label>
               <input
@@ -567,55 +597,30 @@ export function OnlineRoomPage() {
                       disabled={occupied}
                       aria-label={occupied ? "此颜色已被占用" : `选择颜色 ${color}`}
                       style={{ "--swatch": color } as CSSProperties}
-                      onClick={() => setDraftColor(color)}
+                      onClick={() => {
+                        setDraftColor(color);
+                        setSettingsError("");
+                      }}
                     />
                   );
                 })}
               </div>
             </div>
             <div className="online-modal-actions">
-              <button type="button" onClick={() => setSettingsOpen(false)}>
-                取消 (Esc)
+              <button
+                type="button"
+                onClick={() => {
+                  if (profileReady && colorConflictMessage === null) setSettingsOpen(false);
+                  else leaveRoom();
+                }}
+              >
+                {profileReady && colorConflictMessage === null ? "取消 (Esc)" : "退出房间"}
               </button>
               <button className="is-primary" type="submit">
                 保存 (Enter)
               </button>
             </div>
           </form>
-        </div>
-      ) : null}
-      {colorModalOpen && colorConflictMessage !== null ? (
-        <div
-          className="online-modal-bg"
-          role="presentation"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setColorModalOpen(false);
-          }}
-        >
-          <div
-            className="online-modal is-warning"
-            role="alertdialog"
-            aria-modal="true"
-            aria-label="颜色冲突"
-          >
-            <h2>颜色冲突</h2>
-            <p className="online-warning-text">{colorConflictMessage}</p>
-            <div className="online-modal-actions">
-              <button type="button" onClick={() => setColorModalOpen(false)}>
-                知道了
-              </button>
-              <button
-                className="is-primary"
-                type="button"
-                onClick={() => {
-                  setColorModalOpen(false);
-                  setSettingsOpen(true);
-                }}
-              >
-                去修改
-              </button>
-            </div>
-          </div>
         </div>
       ) : null}
       <div className={`online-toast ${toast ? "is-showing" : ""}`} role="status" aria-live="polite">
@@ -644,7 +649,9 @@ function roomReason(input: {
   hasDuplicateColor: boolean;
   matchId: string | null;
   connectedRtcPeers: number;
+  connectionError: string | null;
 }): string {
+  if (input.connectionError !== null) return input.connectionError;
   if (input.signalingStatus === "connecting") return "正在连接房间服务";
   if (input.signalingStatus === "error") return "房间服务连接失败";
   if (input.roomStatus === "connecting") {
@@ -654,6 +661,7 @@ function roomReason(input: {
     return input.matchId === null ? "等待对局确认" : "正在进入对局";
   }
   if (input.playerCount < 2) return "至少需要 2 位玩家";
+  if (input.hasDuplicateColor) return "等待颜色冲突玩家重新选择颜色";
   if (!input.allReady) return "等待所有玩家准备";
   return "所有玩家已就绪，房主可以开始";
 }

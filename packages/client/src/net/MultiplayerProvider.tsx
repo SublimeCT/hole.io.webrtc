@@ -4,11 +4,11 @@ import { createContext, useCallback, useContext, useRef, useState, type ReactNod
 import type { PlayerProfile, RoomCode } from "@hole-io/shared/protocol";
 
 import { MultiplayerSession } from "./multiplayerSession";
+import { multiplayerStore } from "../store/multiplayerStore";
 
 export interface EnsureSessionInput {
   roomCode: RoomCode | null;
   profile: PlayerProfile;
-  onRoomCode: (roomCode: RoomCode) => void;
 }
 
 interface MultiplayerContextValue {
@@ -28,7 +28,6 @@ export function MultiplayerProvider({ children }: { children: ReactNode }): Reac
     const created = new MultiplayerSession({
       profile: input.profile,
       requestedRoomCode: input.roomCode,
-      onRoomCode: input.onRoomCode,
     });
     sessionRef.current = created;
     setSession(created);
@@ -37,9 +36,9 @@ export function MultiplayerProvider({ children }: { children: ReactNode }): Reac
 
   const disposeSession = useCallback((): void => {
     const current = sessionRef.current;
-    if (current === null) return;
-    current.dispose(true);
+    current?.dispose(true);
     sessionRef.current = null;
+    multiplayerStore.getState().reset();
     setSession(null);
   }, []);
 

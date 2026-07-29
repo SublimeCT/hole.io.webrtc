@@ -76,6 +76,21 @@ export function loadPreferences(): GamePreferences {
   return createDefaultPreferences();
 }
 
+export function hasPersistedPlayerName(): boolean {
+  try {
+    const saved = localStorage.getItem(PREFERENCES_KEY);
+    if (!saved) return false;
+    const parsed: unknown = JSON.parse(saved);
+    if (typeof parsed !== "object" || parsed === null || !("playerName" in parsed)) return false;
+    if (typeof parsed.playerName !== "string") return false;
+    const playerName = parsed.playerName.normalize("NFKC").trim();
+    const length = Array.from(playerName).length;
+    return length >= 2 && length <= 10 && PLAYER_NAME_PATTERN.test(playerName);
+  } catch {
+    return false;
+  }
+}
+
 export function persistPreferences(preferences: GamePreferences): void {
   try {
     localStorage.setItem(PREFERENCES_KEY, JSON.stringify(preferences));

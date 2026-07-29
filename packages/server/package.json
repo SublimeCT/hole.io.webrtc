@@ -2,12 +2,18 @@
   "name": "@hole-io/server",
   "version": "0.1.0",
   "private": true,
+  "files": [
+    "dist",
+    "drizzle"
+  ],
   "type": "module",
   "scripts": {
+    "build": "tsup",
     "dev": "tsx watch src/server.ts",
-    "start": "tsx src/server.ts",
+    "start": "node dist/server.mjs",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate",
+    "db:migrate": "node dist/migrate.mjs",
+    "db:migrate:dev": "drizzle-kit migrate",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
@@ -16,7 +22,6 @@
     "@fastify/postgres": "^6.1.0",
     "@fastify/rate-limit": "^11.1.0",
     "@fastify/websocket": "^11.0.0",
-    "@hole-io/shared": "workspace:*",
     "@sinclair/typebox": "^0.34.0",
     "dotenv": "^17.4.2",
     "drizzle-orm": "^0.45.2",
@@ -26,9 +31,11 @@
     "pg": "^8.22.0"
   },
   "devDependencies": {
+    "@hole-io/shared": "workspace:*",
     "@types/pg": "^8.20.0",
     "@types/ws": "^8.18.1",
     "drizzle-kit": "^0.31.10",
+    "tsup": "^8.5.1",
     "tsx": "^4.19.0",
     "vitest": "^3.2.4",
     "ws": "^8.21.1"
