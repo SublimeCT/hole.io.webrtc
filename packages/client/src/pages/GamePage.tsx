@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useStore } from "zustand";
+import type { RoomPeer } from "@hole-io/shared/protocol";
 
 import { saveMatchResult, type MatchResult } from "../app/matchResult";
 import { loadPreferences } from "../app/preferences";
@@ -8,8 +9,26 @@ import { translate } from "../app/i18n";
 import { Game, type AbilityButtonUi, type GameUi, type OpponentIndicatorUi } from "../game/Game";
 import { useMultiplayer } from "../net/MultiplayerProvider";
 import { OnlineGameDriver } from "../net/onlineGameDriver";
-import { multiplayerStore } from "../store/multiplayerStore";
+import { multiplayerStore, type SessionTermination } from "../store/multiplayerStore";
 import { VoidWordmark } from "../ui/VoidWordmark";
+
+/** 联机会话终止原因 → 屏幕底部提示文案。 */
+function terminationMessage(termination: SessionTermination): string {
+  switch (termination) {
+    case "host-left":
+      return "房主已退出游戏";
+    case "host-timeout":
+      return "房主连接超时，游戏已结束";
+    case "kicked":
+      return "你已被房主移出房间";
+    case "idle":
+      return "房间等待超时，已解散";
+    case "server-shutdown":
+      return "服务器维护，房间已关闭";
+    default:
+      return "房间已关闭";
+  }
+}
 
 function requireElement<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector);
@@ -87,10 +106,38 @@ export default function GamePage() {
   const [poopRain, setPoopRain] = useState<
     readonly { id: number; size: number; left: number; delay: number }[]
   >([]);
+  const [exitToast, setExitToast] = useState("");
   const { session, disposeSession } = useMultiplayer();
   const matchId = useStore(multiplayerStore, (state) => state.matchId);
   const roomStatus = useStore(multiplayerStore, (state) => state.room?.status ?? null);
+  const room = useStore(multiplayerStore, (state) => state.room);
+  const termination = useStore(multiplayerStore, (state) => state.termination);
   const isOnline = session !== null && matchId !== null && roomStatus === "playing";
+
+  // 对局结束幂等守卫：本地 Game.onMatchEnd 与 matchId 监听安全网都可能触发，只取首触发。
+  const matchEndedRef = useRef(false);
+  const driverRef = useRef<OnlineGameDriver | null>(null);
+  const latestResultRef = useRef<MatchResult | null>(null);
+  const prevMatchIdRef = useRef<string | null>(matchId);
+  const prevPeersRef = useRef<readonly RoomPeer[]>(room?.peers ?? []);
+  const exitToastTimer = useRef<number | null>(null);
+
+  const showExitToast = useCallback((message: string): void => {
+    setExitToast(message);
+    if (exitToastTimer.current !== null) window.clearTimeout(exitToastTimer.current);
+    exitToastTimer.current = window.setTimeout(() => setExitToast(""), 3_200);
+  }, []);
+
+  const handleMatchEnd = useCallback(
+    (result: MatchResult): void => {
+      if (matchEndedRef.current) return;
+      matchEndedRef.current = true;
+      latestResultRef.current = result;
+      saveMatchResult(result);
+      navigate("/results", { replace: true });
+    },
+    [navigate],
+  );
 
   const returnHome = (): void => {
     if (isOnline && !window.confirm(translate(language, "exitOnlineConfirm"))) return;
@@ -98,16 +145,56 @@ export default function GamePage() {
     navigate("/");
   };
 
+  // 房间解散 / 被踢：回主页（必须 disposeSession，否则 session 半死、回 /online 无法重连）。
+  useEffect(() => {
+    if (termination === null || matchEndedRef.current) return;
+    showExitToast(terminationMessage(termination));
+    disposeSession();
+    navigate("/", { replace: true });
+  }, [termination, disposeSession, navigate, showExitToast]);
+
+  // 正常结束安全网：服务器 match-ended 可能比 host 的 finished 快照先到、peer 连接已关，
+  // 导致 guest 的 Game.onMatchEnd 不触发。监听 matchId null 化时用最近结果/当前 state 兜底。
+  useEffect(() => {
+    const prev = prevMatchIdRef.current;
+    prevMatchIdRef.current = matchId;
+    if (prev === null || matchId !== null) return;
+    if (matchEndedRef.current || termination !== null) return;
+    const fallback =
+      latestResultRef.current ?? driverRef.current?.game?.buildCurrentMatchResult() ?? null;
+    if (fallback !== null) {
+      handleMatchEnd(fallback);
+    } else {
+      navigate("/online", { replace: true });
+    }
+  }, [matchId, termination, handleMatchEnd, navigate]);
+
+  // 玩家中途退出提示：对局中某非 host peer 消失时底部 toast（留在对局）。
+  useEffect(() => {
+    const peers = room?.peers ?? [];
+    if (isOnline && roomStatus === "playing" && termination === null) {
+      for (const old of prevPeersRef.current) {
+        if (old.isHost) continue;
+        if (!peers.some((peer) => peer.peerId === old.peerId)) {
+          showExitToast(`${old.profile.playerName} 已退出游戏`);
+        }
+      }
+    }
+    prevPeersRef.current = peers;
+  }, [room?.peers, isOnline, roomStatus, termination, showExitToast]);
+
+  useEffect(() => {
+    return () => {
+      if (exitToastTimer.current !== null) window.clearTimeout(exitToastTimer.current);
+    };
+  }, []);
+
   useEffect(() => {
     const gameCanvas = canvas.current;
     if (!gameCanvas) return;
     let disposed = false;
     let activeCleanup: (() => void) | null = null;
 
-    const handleMatchEnd = (result: MatchResult): void => {
-      saveMatchResult(result);
-      navigate("/results", { replace: true });
-    };
     const handlePoopHit = (playerCount: number): void => {
       setPoopRain(
         Array.from({ length: playerCount * 10 }, (_, id) => ({
@@ -130,6 +217,7 @@ export default function GamePage() {
         onMatchEnd: handleMatchEnd,
         onPoopHit: handlePoopHit,
       });
+      driverRef.current = driver;
       driver.start().catch((error: unknown) => {
         const status = document.querySelector<HTMLElement>("#loading-status");
         if (status) status.textContent = translate(language, "loadError");
@@ -159,7 +247,7 @@ export default function GamePage() {
     }
 
     return () => activeCleanup?.();
-  }, [isOnline, session, language, navigate]);
+  }, [isOnline, session, language, navigate, handleMatchEnd]);
 
   return (
     <main className="app-shell">
@@ -292,6 +380,14 @@ export default function GamePage() {
         <div className="growth-track">
           <i id="growth-fill" />
         </div>
+      </div>
+
+      <div
+        className={`game-exit-toast ${exitToast ? "is-showing" : ""}`}
+        role="status"
+        aria-live="polite"
+      >
+        {exitToast}
       </div>
     </main>
   );

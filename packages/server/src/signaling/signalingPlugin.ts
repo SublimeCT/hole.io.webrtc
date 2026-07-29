@@ -321,6 +321,18 @@ const signalingPlugin: FastifyPluginAsync<SignalingOptions> = async (app, opts) 
         else publishEvent(result.value);
         return;
       }
+      case "kick-peer": {
+        const result = roomService.kickPeer(connection.peerId, message.peerId);
+        if (!result.ok) {
+          sendError(connection, roomFailureCode(result.error));
+          return;
+        }
+        // 先通知被踢者（专用 kicked 消息），再广播 room-state；避免被踢者先看到
+        // 自己从 peers 消失、被客户端误判为「玩家退出」toast。
+        sendToPeer(message.peerId, { type: "kicked", roomCode: result.value.code });
+        broadcastState(result.value);
+        return;
+      }
       case "heartbeat":
         roomService.heartbeat(connection.peerId);
         send(connection.socket, {

@@ -14,6 +14,38 @@ const MAX_DC_BUFFERED_BYTES = 256 * 1024;
 
 export type GameChannelKind = "reliable" | "unreliable";
 
+/**
+ * 通过 RTCPeerConnection.getStats() 读取当前选中 candidate-pair 的本地 candidate 类型，
+ * 判断本端到对端走的是直连/STUN 打洞（host/srflx/prflx → direct）还是 TURN 中继（relay）。
+ * ICE 可能后续切换路径，故调用方在 connected 后仍可再次调用复检。
+ */
+async function detectIceTransportType(
+  connection: RTCPeerConnection,
+): Promise<"direct" | "relay" | null> {
+  try {
+    const stats = await connection.getStats();
+    let localCandidateId: string | null = null;
+    for (const report of stats.values()) {
+      if (report.type !== "candidate-pair") continue;
+      const pair = report as RTCIceCandidatePairStats;
+      if (pair.nominated || pair.state === "succeeded") {
+        localCandidateId = pair.localCandidateId ?? null;
+        if (localCandidateId !== null) break;
+      }
+    }
+    if (localCandidateId === null) return null;
+    for (const report of stats.values()) {
+      if (report.id !== localCandidateId || report.type !== "local-candidate") continue;
+      // RTCIceCandidateStats 的 candidateType 字段在部分 TS DOM lib 版本里类型缺失，按最小形状读取。
+      const candidateType = (report as { candidateType?: string }).candidateType;
+      return candidateType === "relay" ? "relay" : "direct";
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 interface PeerLink {
   connection: RTCPeerConnection;
   reliable: RTCDataChannel | null;
@@ -24,6 +56,8 @@ interface PeerLink {
 export interface StarConnectionOptions {
   sendSignal(message: ClientToServerMessage): void;
   onPeerStatus(peerId: PeerId, status: PeerConnectionStatus): void;
+  /** WebRTC 连通后检测到的传输类型（direct = host/srflx；relay = TURN）。可多次回调（ICE 可能切换）。 */
+  onPeerConnectionType(peerId: PeerId, type: "direct" | "relay"): void;
   /** DataChannel 收到文本消息时上抛（按 channel label 区分 reliable/unreliable）。 */
   onChannelMessage(peerId: PeerId, channel: GameChannelKind, data: string): void;
   onHostReady(): void;
@@ -207,6 +241,7 @@ export class StarConnectionManager {
       const state = connection.connectionState;
       if (state === "connected") {
         this.checkReady(link, peerId);
+        this.reportConnectionType(peerId, connection);
       } else if (state === "failed" || state === "disconnected") {
         this.options.onPeerStatus(peerId, "failed");
       } else if (state === "closed") {
@@ -289,6 +324,13 @@ export class StarConnectionManager {
     if (link.reliable?.readyState !== "open" || link.unreliable?.readyState !== "open") return;
     this.options.onPeerStatus(peerId, "connected");
     this.checkHostReady();
+  }
+
+  /** 连通后探测并上报 ICE 传输类型；getStats 异步，失败静默（不影响连接本身）。 */
+  private reportConnectionType(peerId: PeerId, connection: RTCPeerConnection): void {
+    void detectIceTransportType(connection).then((type) => {
+      if (type !== null) this.options.onPeerConnectionType(peerId, type);
+    });
   }
 
   private checkHostReady(): void {

@@ -376,6 +376,7 @@
 }
 
 .online-slot {
+  position: relative;
   display: flex;
   align-items: center;
   min-width: 118px;
@@ -669,6 +670,135 @@
 .online-toast.is-showing {
   opacity: 1;
   transform: translate(-50%, 0);
+}
+
+/* 玩家 card 的连接类型标签 */
+.online-conn {
+  font-style: normal;
+  color: var(--muted);
+  opacity: 0.9;
+}
+
+/* 房主踢人按钮 */
+.online-kick {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    color 160ms,
+    background 160ms;
+}
+
+.online-kick:hover {
+  color: oklch(80% 0.18 35);
+  background: oklch(28% 0.08 35);
+}
+
+.online-kick svg {
+  width: 11px;
+  height: 11px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+}
+
+/* 邀请二维码浮层 */
+.online-qr-modal-bg {
+  position: fixed;
+  z-index: 85;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: oklch(7% 0.018 264 / 0.78);
+  backdrop-filter: blur(10px);
+}
+
+.online-qr-modal {
+  width: min(320px, 94vw);
+  padding: 24px;
+  border: 1px solid var(--border-strong);
+  border-radius: 18px;
+  background: var(--surface);
+  box-shadow: 0 30px 80px rgb(0 0 0 / 60%);
+  text-align: center;
+  animation: online-modal-in 220ms ease-out;
+}
+
+.online-qr-modal h2 {
+  margin: 0 0 8px;
+  font-size: 17px;
+}
+
+.online-qr-code {
+  margin: 0 0 14px;
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 0.16em;
+}
+
+.online-qr-code strong {
+  color: var(--accent);
+  font-size: 22px;
+  letter-spacing: 0.2em;
+}
+
+.online-qr-modal img {
+  display: block;
+  margin: 0 auto 12px;
+  border-radius: 12px;
+  background: #eaf6ff;
+}
+
+.online-qr-hint {
+  display: block;
+  margin-bottom: 18px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.online-qr-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+}
+
+.online-qr-actions button {
+  flex: 1;
+  height: 42px;
+  border: 1px solid var(--border-strong);
+  border-radius: 11px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 160ms;
+}
+
+.online-qr-actions button.is-primary {
+  border-color: var(--accent-dim);
+  background: linear-gradient(135deg, var(--accent), var(--accent-dim));
+  color: #06121a;
+}
+
+.online-qr-actions button:hover {
+  background: var(--glass);
+}
+
+.online-qr-actions button.is-primary:hover {
+  background: linear-gradient(135deg, var(--accent), var(--accent));
 }
 
 @keyframes online-grid-move {

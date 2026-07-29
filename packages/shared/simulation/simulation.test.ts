@@ -34,7 +34,7 @@ import {
   VEHICLE_SPEED,
 } from "./constants";
 import { createSimulationPhysicsRuntime, type SimulationPhysicsRuntime } from "./physics";
-import { stepSimulation as stepSimulationWithRuntime } from "./simulation";
+import { advanceRoutedObjects, stepSimulation as stepSimulationWithRuntime } from "./simulation";
 import { createSimulationRuntime, type SimulationRuntime } from "./runtime";
 import { SpatialHash } from "./spatialHash";
 import {
@@ -223,6 +223,56 @@ describe("SimulationRuntime", () => {
       stepSimulationWithRuntime(state, [], 1 / 60, physics, runtime);
       expect(runtime.takeDirtyObjects().map((object) => object.id)).toEqual([routed.id]);
       expect(runtime.takeDirtyObjects()).toEqual([]);
+    } finally {
+      physics.dispose();
+    }
+  });
+});
+
+describe("advanceRoutedObjects (guest-side deterministic vehicle advance)", () => {
+  it("is pure: moves vehicles but leaves every authority field untouched", () => {
+    const initial = createInitialSimulation();
+    const runtime = createSimulationRuntime(initial);
+    const result = advanceRoutedObjects(initial, 1 / 60, runtime);
+    // 仅 objects 数组变化；holes/elapsed/remaining/powerUps/rngState/status 原样保留（同一引用）。
+    expect(result.state.holes).toBe(initial.holes);
+    expect(result.state.elapsed).toBe(initial.elapsed);
+    expect(result.state.remaining).toBe(initial.remaining);
+    expect(result.state.powerUps).toBe(initial.powerUps);
+    expect(result.state.rngState).toBe(initial.rngState);
+    expect(result.state.objects).not.toBe(initial.objects);
+  });
+
+  it("produces byte-identical vehicle positions to the host authoritative step", async () => {
+    // holes: [] 保证 host 侧不会吞噬任何车辆，host 的 stepSimulation 对车辆的唯一作用就是
+    // 与 advanceRoutedObjects 同一个 moveRoutedObjects——两端必须逐帧一致。
+    const base = { ...createInitialSimulation(), holes: [] };
+    const physics = await createSimulationPhysicsRuntime();
+    try {
+      const hostRuntime = createSimulationRuntime(base);
+      const guestRuntime = createSimulationRuntime(base);
+      let hostState = base;
+      let guestState = base;
+      for (let step = 0; step < 300; step += 1) {
+        hostState = stepSimulationWithRuntime(hostState, [], 1 / 60, physics, hostRuntime).state;
+        guestState = advanceRoutedObjects(guestState, 1 / 60, guestRuntime).state;
+      }
+      const hostVehicles = new Map<string, { x: number; y: number }>();
+      for (const object of hostState.objects) {
+        if (object.motion?.kind === "vehicle") {
+          hostVehicles.set(object.id, { x: object.position.x, y: object.position.y });
+        }
+      }
+      let compared = 0;
+      for (const object of guestState.objects) {
+        if (object.motion?.kind !== "vehicle") continue;
+        const host = hostVehicles.get(object.id);
+        expect(host).toBeDefined();
+        expect(object.position.x).toBeCloseTo(host!.x, 8);
+        expect(object.position.y).toBeCloseTo(host!.y, 8);
+        compared += 1;
+      }
+      expect(compared).toBe(CITY_VEHICLE_COUNT);
     } finally {
       physics.dispose();
     }

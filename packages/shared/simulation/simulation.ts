@@ -884,6 +884,44 @@ function moveRoutedObjects(
   return { objects: nextObjects, changedObjectIds };
 }
 
+/** advanceRoutedObjects 的空 releasedObjectIds：联机无 bot，车辆不被 bot 释放。 */
+const EMPTY_RELEASED_OBJECT_IDS: ReadonlySet<string> = new Set();
+
+/**
+ * guest 端确定性推进路由车辆（仅车辆沿路线移动 + 车距避让）。
+ *
+ * 这是 AGENTS.md §0.1「guest 永不本地模拟」的唯一例外：路由车辆运动是 host/guest
+ * 共用的同一纯函数 `moveRoutedObjects` 的闭式等价物，不涉及任何玩法权威性
+ * （位置/分数/吞噬/死亡/道具仍全由 host 计算），故让 guest 本地复算以使全员车辆运动一致。
+ *
+ * 确定性前提（任一被破坏都会让 host/guest 车辆错位，修改时务必保持）：
+ * 1. host 与 guest 用同一固定步长常量 FIXED_STEP_SECONDS = 1/60（Game.ts 同文件共享）。
+ * 2. enforceVehicleSpacing 依赖 Array.sort 稳定（ES2019 起强制稳定），不可改成非稳定排序。
+ * 3. runtime.movingRouteObjectIds 的迭代顺序由相同 initialState.objects 的数组顺序决定，两端一致。
+ * 4. 联机不生成 bot → releasedObjectIds 两端皆空 → 逐 tick 输入完全一致。
+ *
+ * 已知可接受偏差：match-start 信号时延造成全网车辆一个常量相位偏移（4.5m/s × ~RTT/2，亚米级），
+ * 仅纯视觉、不影响玩法（车辆吞噬仍由 host 权威、靠 consumed override 收敛）。不要用 host 时间
+ * 插值去「修正」这个偏移——它不是漂移。
+ */
+export function advanceRoutedObjects(
+  state: SimulationState,
+  deltaSeconds: number,
+  runtime: SimulationRuntime,
+): { state: SimulationState; changedObjectIds: ReadonlySet<string> } {
+  if (state.status === "finished" || deltaSeconds <= 0) {
+    return { state, changedObjectIds: EMPTY_RELEASED_OBJECT_IDS };
+  }
+  const safeDelta = Math.min(deltaSeconds, 0.1);
+  runtime.prepare(state);
+  const routed = moveRoutedObjects(state.objects, runtime, EMPTY_RELEASED_OBJECT_IDS, safeDelta);
+  runtime.commitObjects(routed.objects, routed.changedObjectIds);
+  return {
+    state: { ...state, objects: routed.objects },
+    changedObjectIds: routed.changedObjectIds,
+  };
+}
+
 function activateObject(object: WorldObjectState, hole: HoleState): WorldObjectState {
   if (object.routeMotion?.kind === "vehicle") {
     return object;

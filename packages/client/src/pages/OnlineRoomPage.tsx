@@ -146,6 +146,10 @@ async function copyText(text: string): Promise<void> {
   if (!copied) throw new Error("Unable to copy invite link");
 }
 
+function inviteUrlString(roomCode: RoomCode): string {
+  return `${window.location.origin}${window.location.pathname}#/online?room=${roomCode}`;
+}
+
 export function OnlineRoomPage() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -159,6 +163,7 @@ export function OnlineRoomPage() {
   const [draftName, setDraftName] = useState(preferences.playerName);
   const [draftColor, setDraftColor] = useState(preferences.playerRingColor);
   const [toast, setToast] = useState("");
+  const [qrDataUrl, setQrDataUrl] = useState("");
   const nameInput = useRef<HTMLInputElement>(null);
   const toastTimer = useRef<number | null>(null);
   const { session, ensureSession, disposeSession } = useMultiplayer();
@@ -176,6 +181,7 @@ export function OnlineRoomPage() {
   const signalingStatus = useStore(multiplayerStore, (state) => state.signalingStatus);
   const latencyMs = useStore(multiplayerStore, (state) => state.latencyMs);
   const peerConnections = useStore(multiplayerStore, (state) => state.peerConnections);
+  const peerConnectionTypes = useStore(multiplayerStore, (state) => state.peerConnectionTypes);
   const connectionError = useStore(multiplayerStore, (state) => state.error);
   const matchId = useStore(multiplayerStore, (state) => state.matchId);
 
@@ -192,6 +198,16 @@ export function OnlineRoomPage() {
     (status) => status === "connected",
   ).length;
   const hostPeer = enteredPlayers.find((peer) => peer.isHost) ?? null;
+  // guest 必须先与房主建立 WebRTC 连接才能准备；host 需所有 guest 已连接才能开始。
+  const localConnectedToHost =
+    localPeer !== null &&
+    !localPeer.isHost &&
+    hostPeer !== null &&
+    peerConnections[hostPeer.peerId] === "connected";
+  const enteredGuests = enteredPlayers.filter((peer) => !peer.isHost);
+  const allGuestsConnected = enteredGuests.every(
+    (peer) => peerConnections[peer.peerId] === "connected",
+  );
   const colorConflictMessage = (() => {
     if (localPeer === null || localPeer.isHost) return null;
     const other = enteredPlayers.find(
@@ -231,6 +247,14 @@ export function OnlineRoomPage() {
     if (room?.status === "playing") navigate("/game", { replace: true });
   }, [room?.status, navigate]);
 
+  // host 建房后把房间码写进 URL（与邀请链接同构）；guest 经 ?room= 进入时已匹配，早返回不循环。
+  useEffect(() => {
+    if (room === null) return;
+    const expected = `?room=${room.roomCode}`;
+    if (location.search.toUpperCase() === expected.toUpperCase()) return;
+    navigate({ pathname: "/online", search: expected }, { replace: true });
+  }, [room?.roomCode, location.search, navigate]);
+
   useEffect(() => {
     if (settingsOpen) nameInput.current?.focus();
   }, [settingsOpen]);
@@ -242,8 +266,12 @@ export function OnlineRoomPage() {
         setSettingsError(connectionError);
         setSettingsOpen(true);
       }
+      if (connectionError === "你已被房主移出房间") {
+        disposeSession();
+        navigate({ pathname: "/", search: "" }, { replace: true });
+      }
     }
-  }, [connectionError, showToast]);
+  }, [connectionError, showToast, disposeSession, navigate]);
 
   useEffect(() => {
     if (colorConflictMessage === null) return;
@@ -274,13 +302,54 @@ export function OnlineRoomPage() {
 
   const copyInvite = async (): Promise<void> => {
     if (room === null) return;
-    const inviteUrl = `${window.location.origin}${window.location.pathname}#/online?room=${room.roomCode}`;
+    const inviteUrl = inviteUrlString(room.roomCode);
     try {
       await copyText(inviteUrl);
       showToast("邀请链接已复制");
     } catch {
       showToast("复制失败，请检查浏览器剪贴板权限");
     }
+  };
+
+  const kickPlayer = (player: RoomPlayer): void => {
+    if (room?.status !== "lobby" || session === null) return;
+    if (!window.confirm(`确定移出玩家「${player.name}」？`)) return;
+    session.kickPeer(player.id);
+  };
+
+  const showQrCode = async (): Promise<void> => {
+    if (room === null) return;
+    try {
+      const { toDataURL } = await import("qrcode");
+      const dataUrl = await toDataURL(inviteUrlString(room.roomCode), {
+        width: 240,
+        margin: 1,
+        color: { dark: "#0b1220", light: "#eaf6ff" },
+      });
+      setQrDataUrl(dataUrl);
+    } catch {
+      showToast("二维码生成失败");
+    }
+  };
+
+  /** 本地视角下某玩家 card 应展示的连接类型文本（星型拓扑：本地只与房主或各 guest 直连）。 */
+  const connectionLabel = (player: RoomPlayer): string => {
+    if (localPeer === null) return "";
+    // 本地是 host：每个 guest card 显示本地到该 guest 的链路类型。
+    if (localPeer.isHost) {
+      if (player.host) return "房主";
+      const connected = peerConnections[player.id] === "connected";
+      const type = peerConnectionTypes[player.id];
+      return connected ? (type === "relay" ? "TURN 中继" : "P2P 直连") : "连接中…";
+    }
+    // 本地是 guest：只有到房主的链路有意义；房主 card 与自身 card 显示该链路，其他 guest 无直连。
+    const linkPeerId = hostPeer?.peerId ?? null;
+    const connected = linkPeerId !== null && peerConnections[linkPeerId] === "connected";
+    const type = linkPeerId !== null ? peerConnectionTypes[linkPeerId] : undefined;
+    const label = connected ? (type === "relay" ? "TURN 中继" : "P2P 直连") : "连接中…";
+    if (player.host) return label;
+    if (player.id === peerId) return label;
+    return "";
   };
 
   const primaryAction = (): void => {
@@ -337,6 +406,9 @@ export function OnlineRoomPage() {
     roomStatus: room?.status ?? null,
     signalingStatus,
     playerCount: enteredPlayers.length,
+    isHost: localPeer?.isHost ?? false,
+    localConnectedToHost,
+    allGuestsConnected,
     allReady,
     hasDuplicateColor,
     matchId,
@@ -348,7 +420,9 @@ export function OnlineRoomPage() {
     room === null ||
     localPeer === null ||
     room.status !== "lobby" ||
-    (localPeer.isHost && (!allReady || hasDuplicateColor));
+    (localPeer.isHost
+      ? !allReady || hasDuplicateColor || !allGuestsConnected
+      : !localConnectedToHost);
 
   return (
     <main className="online-room">
@@ -400,11 +474,23 @@ export function OnlineRoomPage() {
               复制邀请链接
             </button>
             <button
+              className="online-ghost-btn"
+              type="button"
+              disabled={room === null}
+              onClick={() => void showQrCode()}
+            >
+              生成邀请二维码
+            </button>
+            <button
               className="online-icon-btn"
               type="button"
-              disabled={signalingStatus !== "open" || (room !== null && room.status !== "lobby")}
+              disabled={
+                signalingStatus !== "open" ||
+                (room !== null && room.status !== "lobby") ||
+                localPeer?.ready === true
+              }
               aria-label="玩家设置"
-              title="玩家设置"
+              title={localPeer?.ready ? "已准备，设置已锁定" : "玩家设置"}
               onClick={() => setSettingsOpen(true)}
             >
               <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -417,7 +503,10 @@ export function OnlineRoomPage() {
               type="button"
               aria-label="离开房间"
               title="离开房间"
-              onClick={leaveRoom}
+              onClick={() => {
+                if (localPeer?.ready && !window.confirm("你已准备，确定离开房间吗？")) return;
+                leaveRoom();
+              }}
             >
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M10 5H5v14h5M14 8l4 4-4 4M8 12h10" />
@@ -505,21 +594,50 @@ export function OnlineRoomPage() {
 
         <footer className="online-bottom">
           <div className="online-roster" aria-label="房间玩家列表">
-            {players.map((player) => (
-              <div
-                className="online-slot"
-                key={player.id}
-                style={{ "--ring": player.color } as CSSProperties}
-              >
-                <i />
-                <div>
-                  <b>{player.name}</b>
-                  <span>
-                    {player.flag} {player.host ? "房主" : player.ready ? "已准备" : "未准备"}
-                  </span>
+            {players.map((player) => {
+              const connLabel = connectionLabel(player);
+              const canKick =
+                localPeer?.isHost === true &&
+                !player.host &&
+                player.entered &&
+                room?.status === "lobby";
+              return (
+                <div
+                  className="online-slot"
+                  key={player.id}
+                  style={{ "--ring": player.color } as CSSProperties}
+                >
+                  <i />
+                  <div>
+                    <b>{player.name}</b>
+                    <span>
+                      {player.flag}{" "}
+                      {player.host
+                        ? "房主"
+                        : player.ready
+                          ? "已准备"
+                          : player.entered
+                            ? "未准备"
+                            : "待重新进入"}
+                      {connLabel ? <em className="online-conn"> · {connLabel}</em> : null}
+                    </span>
+                  </div>
+                  {canKick ? (
+                    <button
+                      className="online-kick"
+                      type="button"
+                      aria-label={`移出玩家 ${player.name}`}
+                      title={`移出玩家 ${player.name}`}
+                      onClick={() => kickPlayer(player)}
+                    >
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M6 6l12 12M18 6L6 18" />
+                      </svg>
+                    </button>
+                  ) : null}
                 </div>
-              </div>
-            ))}
+              );
+            })}
             {Array.from({ length: Math.max(0, 5 - players.length) }, (_, index) => (
               <div className="online-slot is-empty" key={index}>
                 等待连接
@@ -623,6 +741,34 @@ export function OnlineRoomPage() {
           </form>
         </div>
       ) : null}
+      {qrDataUrl ? (
+        <div
+          className="online-qr-modal-bg"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setQrDataUrl("");
+          }}
+        >
+          <div className="online-qr-modal" role="dialog" aria-modal="true" aria-label="邀请二维码">
+            <h2>邀请二维码</h2>
+            {room === null ? null : (
+              <p className="online-qr-code">
+                <strong>{room.roomCode}</strong>
+              </p>
+            )}
+            <img src={qrDataUrl} alt="房间邀请二维码" width={240} height={240} />
+            <span className="online-qr-hint">扫描即可加入房间</span>
+            <div className="online-qr-actions">
+              <button type="button" onClick={() => setQrDataUrl("")}>
+                关闭
+              </button>
+              <button className="is-primary" type="button" onClick={() => void copyInvite()}>
+                复制链接
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       <div className={`online-toast ${toast ? "is-showing" : ""}`} role="status" aria-live="polite">
         {toast}
       </div>
@@ -645,6 +791,9 @@ function roomReason(input: {
   roomStatus: "lobby" | "connecting" | "playing" | null;
   signalingStatus: string;
   playerCount: number;
+  isHost: boolean;
+  localConnectedToHost: boolean;
+  allGuestsConnected: boolean;
   allReady: boolean;
   hasDuplicateColor: boolean;
   matchId: string | null;
@@ -662,6 +811,8 @@ function roomReason(input: {
   }
   if (input.playerCount < 2) return "至少需要 2 位玩家";
   if (input.hasDuplicateColor) return "等待颜色冲突玩家重新选择颜色";
+  if (!input.isHost && !input.localConnectedToHost) return "正在与房主建立连接…";
+  if (input.isHost && !input.allGuestsConnected) return "等待玩家建立连接…";
   if (!input.allReady) return "等待所有玩家准备";
   return "所有玩家已就绪，房主可以开始";
 }

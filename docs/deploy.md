@@ -213,6 +213,8 @@ sudo chmod 600 /etc/holeio/server.env
 
 > URI 里填域名（而非 IP）时，只需在 DNS 加一条 A 记录指向服务器公网 IP，服务器无需额外配置——域名由玩家浏览器解析，信令服务原样透传 URI，coturn 只认端口。
 
+> **移动网络（尤其 iPhone 蜂窝网络）常封 UDP 3478**，导致 WebRTC 打洞失败、玩家卡在「正在建立 WebRTC 连接」并回退。代码层无法根治（客户端已会检测并在玩家 card 显示连接类型，准备前强制先建连让问题在 lobby 暴露）。根治办法是基础设施侧追加 TURN-over-TLS/443：在 coturn 配置 TLS 证书并监听 443，再把 `TURN_URIS` 设成逗号分隔的多条（逗号分隔已支持），例如 `TURN_URIS=turn:<host>:3478?transport=udp,turns:<host>:443?transport=tcp`。运营商不封 443/TLS，浏览器会自动回退到 `turns:` 中继。注意 443 已被 nginx 占用，需让 coturn 用独立 IP 或让 nginx 不监听 443 UDP/WebSocket 之外的 TURN 流量，或用 `turns:<host>:5349`。
+
 6. 验证
 
 ```bash

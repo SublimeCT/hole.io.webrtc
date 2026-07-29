@@ -150,4 +150,43 @@ describe("RoomService", () => {
       error: "INVALID_STATE",
     });
   });
+
+  it("lets the host kick a guest in the lobby but rejects other cases", async () => {
+    const service = new RoomService(new MemoryPersistence(), () => 1_000);
+    const host = "host" as PeerId;
+    const guest = "guest" as PeerId;
+    const created = await service.createRoom(host, profile("Host"));
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    service.enterRoom(created.value.code, guest, profile("Guest"));
+
+    // 非房主不能踢人
+    expect(service.kickPeer(guest, host)).toEqual({ ok: false, error: "NOT_HOST" });
+    // 房主不能踢自己
+    expect(service.kickPeer(host, host)).toEqual({ ok: false, error: "NOT_IN_ROOM" });
+
+    const kicked = service.kickPeer(host, guest);
+    expect(kicked.ok).toBe(true);
+    expect(service.roomForPeer(guest)).toBeUndefined();
+    expect(created.value.members.has(guest)).toBe(false);
+
+    // 房间对其他人仍然存活（非 room-closed）
+    expect(service.getRoom(created.value.code)).toBeDefined();
+  });
+
+  it("rejects kicking while a match is in progress", async () => {
+    const service = new RoomService(new MemoryPersistence(), () => 1_000);
+    const host = "host" as PeerId;
+    const guest = "guest" as PeerId;
+    const created = await service.createRoom(host, profile("Host"));
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    service.enterRoom(created.value.code, guest, profile("Guest"));
+    service.setReady(host, true);
+    service.setReady(guest, true);
+    await service.beginConnection(host);
+    await service.startMatch(host);
+
+    expect(service.kickPeer(host, guest)).toEqual({ ok: false, error: "INVALID_STATE" });
+  });
 });

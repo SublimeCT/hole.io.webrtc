@@ -1,10 +1,15 @@
-import { useEffect, useMemo, type CSSProperties } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useNavigate } from "react-router-dom";
+import { useStore } from "zustand";
 
 import { loadMatchResult, type MatchResult, type MatchResultEntry } from "../app/matchResult";
 import { getHoleProgress } from "@hole-io/shared/simulation";
 import { translate, type Language } from "../app/i18n";
 import { loadPreferences } from "../app/preferences";
+import { useMultiplayer } from "../net/MultiplayerProvider";
+import { multiplayerStore } from "../store/multiplayerStore";
+
+const ONLINE_RETURN_SECONDS = 8;
 
 const EMPTY_RESULT: MatchResult = {
   playerRank: 1,
@@ -54,6 +59,10 @@ export function ResultsPage() {
   const language = loadPreferences().language;
   const localeNumber = new Intl.NumberFormat(language);
   const result = useMemo(() => loadMatchResult() ?? EMPTY_RESULT, []);
+  const { session } = useMultiplayer();
+  const room = useStore(multiplayerStore, (state) => state.room);
+  const isOnline = session !== null && room !== null;
+  const [countdown, setCountdown] = useState(ONLINE_RETURN_SECONDS);
 
   const playerEntry = result.ranking.find((entry) => entry.isPlayer);
   const isOut = playerEntry?.isOut === true;
@@ -65,10 +74,22 @@ export function ResultsPage() {
   const maxLevel = getHoleProgress(result.playerScore).level + 1;
   const maxLevelRadius = getHoleProgress(result.playerScore).radius;
 
+  // 联机正常结束：8s 倒计时后自动回房间 lobby。
+  useEffect(() => {
+    if (!isOnline) return;
+    if (countdown <= 0) {
+      navigate("/online", { replace: true });
+      return;
+    }
+    const timer = window.setTimeout(() => setCountdown((value) => value - 1), 1_000);
+    return () => window.clearTimeout(timer);
+  }, [isOnline, countdown, navigate]);
+
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
       if (event.ctrlKey || event.metaKey) return;
       if (event.code === "KeyR") {
+        if (isOnline) return; // 联机不重开离局
         event.preventDefault();
         navigate("/game", { replace: true });
       } else if (event.code === "Escape") {
@@ -78,7 +99,7 @@ export function ResultsPage() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [navigate]);
+  }, [navigate, isOnline]);
 
   return (
     <main className={`results ${isOut ? "is-out" : "is-win"}`}>
@@ -243,17 +264,31 @@ export function ResultsPage() {
         </div>
 
         <div className="results-actions">
-          <button
-            className="results-btn results-btn-primary"
-            type="button"
-            onClick={() => navigate("/game", { replace: true })}
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M7 4l13 8-13 8z" />
-            </svg>
-            {translate(language, "restart")}
-            <span className="results-btn-key">R</span>
-          </button>
+          {isOnline ? (
+            <button
+              className="results-btn results-btn-primary"
+              type="button"
+              onClick={() => navigate("/online", { replace: true })}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M7 4l13 8-13 8z" />
+              </svg>
+              {translate(language, "backToRoom")}
+              <span className="results-btn-key">{countdown}s</span>
+            </button>
+          ) : (
+            <button
+              className="results-btn results-btn-primary"
+              type="button"
+              onClick={() => navigate("/game", { replace: true })}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M7 4l13 8-13 8z" />
+              </svg>
+              {translate(language, "restart")}
+              <span className="results-btn-key">R</span>
+            </button>
+          )}
           <button
             className="results-btn"
             type="button"
@@ -266,7 +301,9 @@ export function ResultsPage() {
             <span className="results-btn-key">Esc</span>
           </button>
         </div>
-        <p className="results-hint">{translate(language, "resultsHint")}</p>
+        <p className="results-hint">
+          {isOnline ? translate(language, "onlineResultsHint") : translate(language, "resultsHint")}
+        </p>
       </div>
     </main>
   );

@@ -47,6 +47,11 @@ export class MultiplayerSession {
       },
       onPeerStatus: (peerId, status) =>
         multiplayerStore.getState().setPeerConnection(peerId, status),
+      onPeerConnectionType: (peerId, type) => {
+        // 满足「与玩家建立连接后 console.log 连接类型」的需求，并写入 store 供 UI 展示。
+        console.log(`[WebRTC] peer=${peerId} type=${type}`);
+        multiplayerStore.getState().setPeerConnectionType(peerId, type);
+      },
       onChannelMessage: (peerId, channel, data) => {
         if (this.gameMessageHandler !== null) {
           this.gameMessageHandler(peerId, channel, data);
@@ -73,6 +78,11 @@ export class MultiplayerSession {
 
   beginConnection(): void {
     this.signaling.send({ type: "begin-connection" });
+  }
+
+  /** 房主把指定 guest 踢出房间（仅 lobby 有效）。 */
+  kickPeer(peerId: PeerId): void {
+    this.signaling.send({ type: "kick-peer", peerId });
   }
 
   /** OnlineGameDriver 注册游戏消息回调（host 收 InputPacket，guest 收快照/事件/checkpoint）。 */
@@ -178,6 +188,14 @@ export class MultiplayerSession {
         this.signaling.close(false); // 停止心跳
         multiplayerStore.getState().clearRoom();
         multiplayerStore.getState().setError(roomClosedMessage(message.reason));
+        multiplayerStore.getState().setTermination(message.reason);
+        return;
+      case "kicked":
+        // 被房主移出：销毁本地会话（不重发 leave-room，服务端已移除），回主页。
+        this.dispose(false);
+        multiplayerStore.getState().clearRoom();
+        multiplayerStore.getState().setError("你已被房主移出房间");
+        multiplayerStore.getState().setTermination("kicked");
         return;
       case "heartbeat-ack":
         multiplayerStore.getState().setLatency(Math.max(0, Date.now() - message.clientTime));

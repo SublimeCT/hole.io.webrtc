@@ -329,6 +329,19 @@ export class RoomService {
     return { ok: true, value: await this.close(room, "closed") };
   }
 
+  /** 房主把指定 guest 踢出房间（仅 lobby；对局中由信令层 MATCH_IN_PROGRESS 门控拒绝）。 */
+  kickPeer(hostPeerId: PeerId, targetPeerId: PeerId): RoomResult<Room> {
+    const room = this.roomForPeer(hostPeerId);
+    if (room === undefined) return { ok: false, error: "NOT_IN_ROOM" };
+    if (room.hostPeerId !== hostPeerId) return { ok: false, error: "NOT_HOST" };
+    if (room.status !== "lobby") return { ok: false, error: "INVALID_STATE" };
+    const target = room.members.get(targetPeerId);
+    if (target === undefined || target.isHost) return { ok: false, error: "NOT_IN_ROOM" };
+    room.members.delete(targetPeerId);
+    this.peerRooms.delete(targetPeerId);
+    return { ok: true, value: room };
+  }
+
   async sweep(): Promise<RoomEvent[]> {
     const now = this.now();
     const events: RoomEvent[] = [];

@@ -3,7 +3,10 @@
 //       收 guest InputPacket 喂循环、响应 resync 发分块 checkpoint。
 // guest：收 match-start 建 guest Game、~30Hz 上报 InputPacket、收增量快照 applyDelta、
 //        revision 不连续时发 resync-request、收 checkpoint 分块原子恢复。
-// 严格遵守 AGENTS.md §0.1：guest 永不本地模拟，只渲染 host 快照。
+// 严格遵守 AGENTS.md §0.1：guest 永不本地模拟玩法状态，只渲染 host 快照。
+// 唯一例外是确定性路由车辆运动（见 advanceRoutedObjects）：它是 host/guest 共用的同一纯函数
+// 的闭式等价物、不涉及玩法权威性（位置/分数/吞噬/死亡/道具仍全由 host 算），故让 guest 本地
+// 复算以使全员车辆运动一致。
 import {
   createMultiplayerSimulation,
   type AbilityId,

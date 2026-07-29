@@ -14,6 +14,7 @@ import {
   createInitialSimulation,
   createSimulationPhysicsRuntime,
   createSimulationRuntime,
+  advanceRoutedObjects,
   getHoleProgress,
   stepSimulation,
   type AbilityId,
@@ -165,6 +166,12 @@ export class Game {
   readonly #mode: GameMode;
   readonly #physicsRuntime: SimulationPhysicsRuntime | null;
   readonly #simulationRuntime: SimulationRuntime | null;
+  /**
+   * guest 专属的车辆推进 runtime（纯索引，无物理）。与 #simulationRuntime 分开：
+   * guest 的 #simulationRuntime 保持 null，使脏物体仍走 #guestDirtyObjectIds 渲染路径；
+   * 这个 runtime 仅用于 advanceRoutedObjects 的车辆索引/车距避让。
+   */
+  readonly #guestVehicleRuntime: SimulationRuntime | null;
   readonly #localPlayerId: string;
   readonly #playerNames: ReadonlyMap<string, string>;
   readonly #playerColors: ReadonlyMap<string, THREE.ColorRepresentation>;
@@ -183,7 +190,6 @@ export class Game {
   readonly #emittedConsumed = new Set<string>();
   readonly #remoteInputs = new Map<string, RemoteInput>();
   readonly #lastProcessedInputByPeer = new Map<string, number>();
-  readonly #initialState: SimulationState;
   // guest 输入上报状态
   #inputSendAccumulator = 0;
   #lastTime = 0;
@@ -219,6 +225,7 @@ export class Game {
     config: GameConfig,
     physicsRuntime: SimulationPhysicsRuntime | null,
     simulationRuntime: SimulationRuntime | null,
+    guestVehicleRuntime: SimulationRuntime | null,
   ) {
     const { canvas, ui, preferences } = config;
     this.#canvas = canvas;
@@ -228,10 +235,10 @@ export class Game {
     this.#onMatchEnd = config.onMatchEnd;
     this.#onPoopHit = config.onPoopHit;
     this.#state = config.initialState;
-    this.#initialState = config.initialState;
     this.#mode = config.mode;
     this.#physicsRuntime = physicsRuntime;
     this.#simulationRuntime = simulationRuntime;
+    this.#guestVehicleRuntime = guestVehicleRuntime;
     config.initialState.objects.forEach((object, index) =>
       this.#objectIndexById.set(object.id, index),
     );
@@ -315,9 +322,12 @@ export class Game {
     const physicsRuntime = config.mode === "guest" ? null : await createSimulationPhysicsRuntime();
     const simulationRuntime =
       config.mode === "guest" ? null : createSimulationRuntime(config.initialState);
+    // guest 用纯索引 runtime 本地推进路由车辆（确定性环境运动，见 advanceRoutedObjects）。
+    const guestVehicleRuntime =
+      config.mode === "guest" ? createSimulationRuntime(config.initialState) : null;
     let game: Game;
     try {
-      game = new Game(config, physicsRuntime, simulationRuntime);
+      game = new Game(config, physicsRuntime, simulationRuntime, guestVehicleRuntime);
     } catch (error: unknown) {
       physicsRuntime?.dispose();
       throw error;
@@ -386,8 +396,31 @@ export class Game {
     this.#renderDeltaAccumulator += frameSeconds;
 
     if (this.#mode === "guest") {
-      // guest：不推进权威模拟（位置/分数由 host 快照决定），只按节拍上报本地输入。
-      this.#accumulator = 0;
+      // guest：不推进权威模拟（位置/分数由 host 快照决定）。唯一例外是确定性路由车辆：
+      // guest 用与 host 相同的纯函数 advanceRoutedObjects 本地推进，保证全员车辆运动一致。
+      // 详见 AGENTS.md §0.1 与 advanceRoutedObjects 注释。
+      if (this.#guestVehicleRuntime !== null) {
+        let guestSteps = 0;
+        while (
+          this.#matchStarted &&
+          this.#accumulator >= FIXED_STEP_SECONDS &&
+          guestSteps < MAX_STEPS_PER_FRAME
+        ) {
+          const result = advanceRoutedObjects(
+            this.#state,
+            FIXED_STEP_SECONDS,
+            this.#guestVehicleRuntime,
+          );
+          this.#state = result.state;
+          for (const objectId of result.changedObjectIds) this.#guestDirtyObjectIds.add(objectId);
+          this.#accumulator -= FIXED_STEP_SECONDS;
+          guestSteps += 1;
+        }
+        // 超过单帧上限的积压直接丢弃，防止卡顿后螺旋追赶（与 host 一致）。
+        if (this.#accumulator > FIXED_STEP_SECONDS) this.#accumulator = 0;
+      } else {
+        this.#accumulator = 0;
+      }
       if (this.#matchStarted) {
         this.#inputSendAccumulator += frameSeconds;
         if (this.#inputSendAccumulator >= INPUT_SEND_INTERVAL_SECONDS) {
@@ -569,9 +602,16 @@ export class Game {
     this.#worldRevision = delta.worldRevision;
   }
 
-  /** guest：driver 收到可靠 checkpoint 后，从初始基线重建世界。 */
+  /**
+   * guest：driver 收到可靠 checkpoint 后重建可观察世界。
+   * 以**当前** state 为物体基线（而非 #initialState）：非 overridden 物体在 guest 恒正确
+   * （静态建筑=初始、路由车辆=本地推进=与 host 一致），被 host override 的 active/consumed
+   * 仍被纠正。这也修复了一个既有潜在 bug——任何 resync 都会把车辆弹回出生点并永久停住
+   * （车辆不在 delta/checkpoint 里），改成当前基线即保留本地推进位置。
+   */
   applyCheckpoint(checkpoint: FullStateCheckpoint): void {
-    this.#state = applyCheckpointToState(this.#initialState, checkpoint);
+    this.#state = applyCheckpointToState(this.#state, checkpoint);
+    this.#guestVehicleRuntime?.reset(this.#state);
     this.#worldRevision = checkpoint.worldRevision;
     this.#guestDirtyObjectIds.clear();
     this.#fullObjectSyncPending = true;
@@ -581,6 +621,14 @@ export class Game {
   /** guest 本地 worldRevision，driver 据此与 delta.baseWorldRevision 比对决定是否 resync。 */
   get localWorldRevision(): number {
     return this.#worldRevision;
+  }
+
+  /**
+   * 用当前渲染 state 构造一局结算结果。供 GamePage 在服务器 match-ended 早于本地 finished
+   * 快照到达时兜底用（此时 Game.onMatchEnd 未必触发，但 #state 仍是最近一帧的权威快照）。
+   */
+  buildCurrentMatchResult(): MatchResult {
+    return this.#createMatchResult();
   }
 
   /** host：driver 收到 guest resync-request 时，编码当前权威世界为可靠 checkpoint。 */

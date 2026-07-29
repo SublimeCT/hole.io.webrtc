@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { PlayerProfile, RoomCode } from "./signaling.js";
-import { isServerToClientMessage, normalizePlayerProfile } from "./signaling.js";
+import {
+  isClientToServerMessage,
+  isServerToClientMessage,
+  normalizePlayerProfile,
+} from "./signaling.js";
 
 const room = {
   roomCode: "ABC234" as RoomCode,
@@ -23,6 +27,14 @@ const turn = {
 describe("signaling protocol", () => {
   it("accepts a valid server room message", () => {
     expect(isServerToClientMessage({ type: "room-created", room, turn })).toBe(true);
+  });
+
+  it("accepts kick-peer (client) and kicked (server) messages", () => {
+    expect(isClientToServerMessage({ type: "kick-peer", peerId: "guest-1" })).toBe(true);
+    expect(isClientToServerMessage({ type: "kick-peer", peerId: "guest-1", extra: true })).toBe(
+      false,
+    );
+    expect(isServerToClientMessage({ type: "kicked", roomCode: room.roomCode })).toBe(true);
   });
 
   it("rejects unknown fields and incomplete ICE server credentials", () => {

@@ -113,6 +113,10 @@ const UpdateProfileSchema = Type.Object(
   { type: Type.Literal("update-profile"), profile: PlayerProfileSchema },
   { additionalProperties: false },
 );
+const KickPeerSchema = Type.Object(
+  { type: Type.Literal("kick-peer"), peerId: PeerIdSchema },
+  { additionalProperties: false },
+);
 const EmptyMessage = <T extends string>(type: T) =>
   Type.Object({ type: Type.Literal(type) }, { additionalProperties: false });
 
@@ -168,6 +172,7 @@ export const ClientToServerMessageSchema = Type.Union([
   EnterRoomSchema,
   SetReadySchema,
   UpdateProfileSchema,
+  KickPeerSchema,
   EmptyMessage("begin-connection"),
   SignalOfferSchema,
   SignalAnswerSchema,
@@ -264,6 +269,9 @@ export const ServerToClientMessageSchema = Type.Union([
   ServerMessage("room-closed", {
     roomCode: RoomCodeSchema,
     reason: RoomClosedReasonSchema,
+  }),
+  ServerMessage("kicked", {
+    roomCode: RoomCodeSchema,
   }),
   ServerMessage("heartbeat-ack", {
     clientTime: Type.Integer({ minimum: 0 }),
