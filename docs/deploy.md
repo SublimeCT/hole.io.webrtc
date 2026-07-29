@@ -135,6 +135,17 @@ server {
 
 2. 启用、取证书、重载
 
+已有通配符证书（其他站点在用）：把配置里的 `ssl_certificate`/`ssl_certificate_key` 指到那份证书路径，跳过 certbot。
+
+```bash
+sudo rm -f /etc/nginx/sites-enabled/default
+sudo ln -s /etc/nginx/sites-available/holeio /etc/nginx/sites-enabled/holeio
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+没有证书、用 Let's Encrypt 现取：
+
 ```bash
 sudo apt-get install -y nginx certbot python3-certbot-nginx
 sudo rm -f /etc/nginx/sites-enabled/default
@@ -145,7 +156,7 @@ sudo systemctl reload nginx
 sudo certbot renew --dry-run
 ```
 
-> 前提：域名 A 记录已指向本机公网 IP。已有该域名的 nginx server 块时，只需往里加 `upstream` 和三个 `location`（`/access-status`、`/ws`、`/`），不必新建文件。`proxy_read_timeout 3600s` 必须有（默认 60s 会掐断空闲 WebSocket）；`X-Forwarded-For` 必须透传，否则 Fastify（`TRUST_PROXY` 默认信任 127.0.0.1）拿不到真实客户端 IP，单 IP 连接数限制会全员挤成 nginx 的 IP。
+> 前提：域名 A 记录已指向本机公网 IP。已有该域名的 nginx server 块时，只需往里加 `upstream` 和三个 `location`（`/access-status`、`/ws`、`/`），不必新建文件。通配符证书（DNS-01 签发）不需要 `/.well-known/acme-challenge/` 那段，可删；若别的站点已有全局 80→443 跳转，本站点的 `listen 80` 块也可删。`proxy_read_timeout 3600s` 必须有（默认 60s 会掐断空闲 WebSocket）；`X-Forwarded-For` 必须透传，否则 Fastify（`TRUST_PROXY` 默认信任 127.0.0.1）拿不到真实客户端 IP，单 IP 连接数限制会全员挤成 nginx 的 IP。
 
 ## 配置 TURN
 
@@ -189,6 +200,8 @@ sudo systemctl enable --now coturn
 sudo install -d -m 0755 /etc/holeio
 sudo tee /etc/holeio/server.env > /dev/null <<'EOF'
 DATABASE_URL=postgres://holeio:<密码>@localhost:5432/holeio
+CORS_ORIGIN=https://<your-domain>
+HOST=127.0.0.1
 TURN_SECRET=<第 1 步生成的 secret>
 STUN_URIS=stun:<公网IP或域名>:3478
 TURN_URIS=turn:<公网IP或域名>:3478?transport=udp
@@ -196,7 +209,7 @@ EOF
 sudo chmod 600 /etc/holeio/server.env
 ```
 
-`TURN_SECRET` 必须等于 coturn 的 `static-auth-secret`。`TURN_TTL_SECONDS`（默认 3600）、`TURN_REALM`（默认 hole.io）可不写。dev 用工作目录的 `.env`/`.env.local`，prod 用这个 `EnvironmentFile`，两套互不干扰。
+`TURN_SECRET` 必须等于 coturn 的 `static-auth-secret`。`CORS_ORIGIN` 必须设成生产域名（默认 `http://localhost:5173`，不设会导致 `/ws` 的 Origin 校验返回 403、WebSocket 连不上；`/access-status` 因不走该校验仍正常）。`HOST=127.0.0.1` 让 Fastify 只监听本机，公网由 nginx 反代（默认 `0.0.0.0` 会监听所有网卡）。`TURN_TTL_SECONDS`（默认 3600）、`TURN_REALM`（默认 hole.io）可不写。dev 用工作目录的 `.env`/`.env.local`，prod 用这个 `EnvironmentFile`，两套互不干扰。
 
 > URI 里填域名（而非 IP）时，只需在 DNS 加一条 A 记录指向服务器公网 IP，服务器无需额外配置——域名由玩家浏览器解析，信令服务原样透传 URI，coturn 只认端口。
 
