@@ -116,6 +116,12 @@ export type WorldEvent =
       matchId: string;
       worldRevision: number;
       powerUps: readonly MapPowerUp[];
+    }
+  | {
+      type: "poop-hit";
+      matchId: string;
+      worldRevision: number;
+      peerId: string;
     };
 
 /**

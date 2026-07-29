@@ -127,6 +127,13 @@ describe("signaling websocket", () => {
     send(guest, { type: "set-ready", ready: false });
     expect(await playingError).toMatchObject({ type: "room-error", code: "MATCH_IN_PROGRESS" });
 
+    const hostAfterGuestLeave = receive(host);
+    send(guest, { type: "leave-room" });
+    expect(await hostAfterGuestLeave).toMatchObject({
+      type: "room-state",
+      room: { status: "playing", peers: [{ isHost: true }] },
+    });
+
     host.close();
     guest.close();
   });
@@ -137,5 +144,28 @@ describe("signaling websocket", () => {
     send(socket, { type: "heartbeat", clientTime: 1, injected: true });
     expect(await error).toMatchObject({ type: "room-error", code: "INVALID_MESSAGE" });
     socket.close();
+  });
+
+  it("returns a specific error when a player name is already used in the room", async () => {
+    const host = await connect(url);
+    const hostCreated = receive(host);
+    send(host, { type: "create-room", profile: profile("Same Name") });
+    const created = await hostCreated;
+    expect(created.type).toBe("room-created");
+
+    const guest = await connect(url);
+    const duplicateError = receive(guest);
+    send(guest, {
+      type: "enter-room",
+      roomCode: (created.room as { roomCode: string }).roomCode,
+      profile: profile("same name"),
+    });
+    expect(await duplicateError).toMatchObject({
+      type: "room-error",
+      code: "PLAYER_NAME_TAKEN",
+    });
+
+    host.close();
+    guest.close();
   });
 });

@@ -452,10 +452,34 @@
   color: #06121a;
 }
 
+.online-action.is-primary:not(:disabled):hover,
+.online-action.is-primary:not(:disabled):focus-visible {
+  border: 0;
+  background: linear-gradient(135deg, oklch(91% 0.14 195), var(--accent));
+  box-shadow:
+    0 0 30px color-mix(in oklch, var(--accent) 50%, transparent),
+    0 6px 0 oklch(43% 0.1 195);
+  color: #06121a;
+}
+
+.online-action.is-primary:not(:disabled):active {
+  background: linear-gradient(135deg, var(--accent), oklch(68% 0.14 195));
+  box-shadow:
+    0 0 18px color-mix(in oklch, var(--accent) 42%, transparent),
+    0 2px 0 oklch(43% 0.1 195);
+  color: #06121a;
+  transform: translateY(2px);
+}
+
 .online-action:disabled {
   box-shadow: none;
   cursor: not-allowed;
-  opacity: 0.38;
+  opacity: 0.62;
+}
+
+.online-action.is-primary:disabled {
+  background: linear-gradient(135deg, var(--accent), var(--accent-dim));
+  color: #06121a;
 }
 
 .online-modal-bg {

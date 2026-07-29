@@ -190,6 +190,7 @@ export type RoomErrorCode =
   | "INVALID_MESSAGE"
   | "ROOM_UNAVAILABLE"
   | "ROOM_FULL"
+  | "PLAYER_NAME_TAKEN"
   | "ROOM_LIMIT_REACHED"
   | "ALREADY_IN_ROOM"
   | "NOT_IN_ROOM"
@@ -213,6 +214,7 @@ const RoomErrorCodeSchema = Type.Union([
   Type.Literal("INVALID_MESSAGE"),
   Type.Literal("ROOM_UNAVAILABLE"),
   Type.Literal("ROOM_FULL"),
+  Type.Literal("PLAYER_NAME_TAKEN"),
   Type.Literal("ROOM_LIMIT_REACHED"),
   Type.Literal("ALREADY_IN_ROOM"),
   Type.Literal("NOT_IN_ROOM"),

@@ -215,6 +215,11 @@ export class OnlineGameDriver {
       case "checkpoint-chunk":
         if (!this.#opts.session.isHost) this.#onCheckpointChunk(message);
         return;
+      case "poop-hit":
+        if (!this.#opts.session.isHost && message.peerId === multiplayerStore.getState().peerId) {
+          this.#opts.onPoopHit(this.#matchConfig?.players.length ?? 0);
+        }
+        return;
       case "match-end":
       case "object-consumed":
       case "player-eliminated":

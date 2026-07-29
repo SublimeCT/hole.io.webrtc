@@ -100,6 +100,7 @@ export interface GameUi {
   growthFill: HTMLElement;
   time: HTMLElement;
   timerRoot: HTMLElement;
+  fps: HTMLElement;
   rankingRows: readonly RankingRowUi[];
   dragPad: HTMLElement;
   dragKnob: HTMLElement;
@@ -166,6 +167,7 @@ export class Game {
   readonly #simulationRuntime: SimulationRuntime | null;
   readonly #localPlayerId: string;
   readonly #playerNames: ReadonlyMap<string, string>;
+  readonly #playerColors: ReadonlyMap<string, THREE.ColorRepresentation>;
   readonly #matchId: string | null;
   readonly #onBroadcastSnapshot: ((delta: StateDeltaSnapshot) => void) | undefined;
   readonly #onWorldEvents: ((events: readonly WorldEvent[]) => void) | undefined;
@@ -189,6 +191,8 @@ export class Game {
   #renderDeltaAccumulator = 0;
   #nextRenderTime = 0;
   #hudAccumulator = 0;
+  #fpsWindowStartedAt = 0;
+  #renderedFramesInWindow = 0;
   #matchStarted = false;
   #pageVisible = document.visibilityState !== "hidden";
   #forceRender = true;
@@ -233,6 +237,7 @@ export class Game {
     );
     this.#localPlayerId = config.localPlayerId;
     this.#playerNames = config.playerNames;
+    this.#playerColors = config.playerColors;
     this.#matchId = config.matchId;
     this.#onBroadcastSnapshot = config.onBroadcastSnapshot;
     this.#onWorldEvents = config.onWorldEvents;
@@ -339,6 +344,9 @@ export class Game {
     this.#matchStarted = true;
     this.#lastTime = performance.now();
     this.#nextRenderTime = this.#lastTime;
+    this.#fpsWindowStartedAt = this.#lastTime;
+    this.#renderedFramesInWindow = 0;
+    this.#ui.fps.textContent = "-- FPS";
     this.#renderDeltaAccumulator = 0;
     this.#forceRender = true;
     this.#renderer.setAnimationLoop(this.#frame);
@@ -428,6 +436,7 @@ export class Game {
       }
       this.#renderer.clear(true, true, true);
       this.#renderer.render(this.#scene, this.#camera);
+      this.#updateFps(time);
       this.#renderDeltaAccumulator = 0;
       this.#forceRender = false;
       if (time < this.#nextRenderTime) {
@@ -444,6 +453,15 @@ export class Game {
       this.#onMatchEnd(this.#createMatchResult());
     }
   };
+
+  #updateFps(time: number): void {
+    this.#renderedFramesInWindow += 1;
+    const elapsed = time - this.#fpsWindowStartedAt;
+    if (elapsed < 500) return;
+    this.#ui.fps.textContent = `${Math.round((this.#renderedFramesInWindow * 1_000) / elapsed)} FPS`;
+    this.#fpsWindowStartedAt = time;
+    this.#renderedFramesInWindow = 0;
+  }
 
   /** offline/host：固定步长推进一步权威模拟，并消费本地 + 远端输入。 */
   #stepAuthoritative(): void {
@@ -974,6 +992,10 @@ export class Game {
       const displayName = this.#playerNames.get(hole.id) ?? hole.id;
       const holeProgress = getHoleProgress(hole.score);
       row.avatar.textContent = displayName.charAt(0).toUpperCase() || "·";
+      const playerColor = new THREE.Color(this.#playerColors.get(hole.id) ?? "#5f6b7a");
+      row.avatar.style.background = `#${playerColor.getHexString()}`;
+      const luminance = playerColor.r * 0.2126 + playerColor.g * 0.7152 + playerColor.b * 0.0722;
+      row.avatar.style.color = luminance > 0.42 ? "#06121a" : "#ffffff";
       row.name.textContent = displayName.toUpperCase();
       row.meta.textContent = hole.isOut
         ? `Lv.${holeProgress.level + 1} · ${translate(this.#preferences.language, "out")}`

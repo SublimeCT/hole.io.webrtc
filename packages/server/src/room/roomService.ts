@@ -62,6 +62,7 @@ export type RoomEvent =
 export type RoomFailure =
   | "ROOM_UNAVAILABLE"
   | "ROOM_FULL"
+  | "PLAYER_NAME_TAKEN"
   | "ROOM_LIMIT_REACHED"
   | "ALREADY_IN_ROOM"
   | "NOT_IN_ROOM"
@@ -169,6 +170,9 @@ export class RoomService {
     if (room.status !== "lobby") return { ok: false, error: "ROOM_UNAVAILABLE" };
 
     const existing = room.members.get(peerId);
+    if (this.isPlayerNameTaken(room, profile.playerName, peerId)) {
+      return { ok: false, error: "PLAYER_NAME_TAKEN" };
+    }
     if (existing !== undefined) {
       existing.profile = profile;
       existing.entered = true;
@@ -207,9 +211,21 @@ export class RoomService {
     if (room.status !== "lobby") return { ok: false, error: "INVALID_STATE" };
     const member = room.members.get(peerId);
     if (member === undefined || !member.entered) return { ok: false, error: "NOT_IN_ROOM" };
+    if (this.isPlayerNameTaken(room, profile.playerName, peerId)) {
+      return { ok: false, error: "PLAYER_NAME_TAKEN" };
+    }
     member.profile = profile;
     member.ready = false;
     return { ok: true, value: room };
+  }
+
+  private isPlayerNameTaken(room: Room, playerName: string, excludePeerId: PeerId): boolean {
+    const key = playerName.normalize("NFKC").toLocaleLowerCase();
+    return [...room.members.values()].some(
+      (member) =>
+        member.peerId !== excludePeerId &&
+        member.profile.playerName.normalize("NFKC").toLocaleLowerCase() === key,
+    );
   }
 
   async beginConnection(peerId: PeerId): Promise<RoomResult<Room>> {

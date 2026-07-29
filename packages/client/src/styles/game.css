@@ -416,6 +416,22 @@
 }
 
 /* ===== 底部控件 ===== */
+.hud-fps {
+  position: fixed;
+  z-index: 26;
+  bottom: max(7px, env(safe-area-inset-bottom));
+  left: max(10px, env(safe-area-inset-left));
+  min-width: 62px;
+  color: var(--accent);
+  font-family: var(--font-display);
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  text-shadow: 0 0 10px color-mix(in oklch, var(--accent) 60%, transparent);
+  pointer-events: none;
+}
+
 .hud-controls {
   position: absolute;
   left: 0;
@@ -442,7 +458,7 @@
   color: var(--muted);
   font-size: 14px;
   letter-spacing: 0.06em;
-  margin: 0 0 10px 8px;
+  margin: 0 0 22px 8px;
 }
 
 .hud-kbd kbd {

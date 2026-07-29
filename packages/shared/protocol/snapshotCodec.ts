@@ -170,7 +170,7 @@ export function buildFullCheckpoint(input: CheckpointInput): FullStateCheckpoint
  * - consumed → object-consumed（creditedPeerIds = 吞噬者）
  * - player-defeated → player-eliminated（objectId 为被击败 peerId，holeId 为击败者）
  * - power-up-collected → power-up-changed（携带当前全量 powerUps）
- * - poop-hit 不广播（guest 从 poopHazards 全量同步看到）
+ * - poop-hit → poop-hit（guest 需要可靠事件触发仅本机可见的粪便雨）
  */
 export function simulationEventToWorldEvent(
   event: SimulationEvent,
@@ -202,7 +202,12 @@ export function simulationEventToWorldEvent(
       powerUps: ctx.powerUps,
     };
   }
-  return null;
+  return {
+    type: "poop-hit",
+    matchId: ctx.matchId,
+    worldRevision: ctx.worldRevision,
+    peerId: event.holeId,
+  };
 }
 
 function playerSnapshotToHole(snap: PlayerSnapshot): HoleState {

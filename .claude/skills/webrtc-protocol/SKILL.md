@@ -22,6 +22,8 @@ description: Hole.io 项目的 WebRTC 星型联机、host 权威模拟、房间�
 
 不要把 checkpoint 附在下一条 unreliable 快照中。大包会增加拥塞、仍可能丢失，并阻塞后续高频数据。
 
+只在本机呈现、无法从快照最终状态推导的瞬时效果必须发 reliable 事件。例如 `poop-hit` 不能靠陷阱从 `poopHazards` 中消失来推断，否则 guest 不知道具体命中了谁，也无法触发本机 UI。
+
 ## 序号与恢复
 
 - `snapshotSeq` 标识每个普通快照，允许断层；接收端丢弃旧序号并继续插值。
@@ -37,7 +39,7 @@ description: Hole.io 项目的 WebRTC 星型联机、host 权威模拟、房间�
 1. `lobby` 中所有 entered 玩家都 ready 后，host 请求 `begin-connection`。
 2. `connecting` 中只允许 host↔guest 的 SDP/ICE。每个 guest 建立一组 reliable/unreliable DataChannel。
 3. host 确认所有 DataChannel 可用后请求 `start-match`；后端进入固定时长的 `playing`。
-4. `playing` 时 WSS 保持连接但客户端消息只接受 application heartbeat。
+4. `playing` 时 WSS 保持连接但客户端消息只接受 application heartbeat 和主动 `leave-room`。
 5. 计时结束后所有成员 `entered=false`、`ready=false`，必须再次 `enter-room` 才参加下一局。
 
 host 在任一状态心跳超时都解散房间；guest 超时只移除。v1 不迁移 host。
@@ -47,7 +49,7 @@ host 在任一状态心跳超时都解散房间；guest 超时只移除。v1 不
 1. 先更新 `packages/shared/protocol` 的 runtime schema 和类型。
 2. 检查 WSS message 是否仍设置 `additionalProperties: false`，并限制字符串和 payload 大小。
 3. 检查 SDP/ICE 是否只能在 connecting 且只能 host↔guest 转发。
-4. 检查 playing dispatcher 是否只接受 heartbeat。
+4. 检查 playing dispatcher 是否只接受 heartbeat 和主动 `leave-room`。
 5. 检查高频包中没有玩家名称、静态地图基线或可由接收端推导的字段。
 6. 检查 `SPEC.md` 和 `docs/phase-3-notes.md` 是否同步。
 7. 运行 typecheck、test、lint 和 format check。

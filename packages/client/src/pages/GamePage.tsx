@@ -41,6 +41,7 @@ function collectGameUi(): GameUi {
     growthFill: requireElement("#growth-fill"),
     time: requireElement("#time"),
     timerRoot: requireElement("#timer-root"),
+    fps: requireElement("#fps"),
     rankingRows: Array.from({ length: 5 }, (_, index) => ({
       root: requireElement(`#rank-${index}`),
       position: requireElement(`#rank-${index}-position`),
@@ -86,10 +87,16 @@ export default function GamePage() {
   const [poopRain, setPoopRain] = useState<
     readonly { id: number; size: number; left: number; delay: number }[]
   >([]);
-  const { session } = useMultiplayer();
+  const { session, disposeSession } = useMultiplayer();
   const matchId = useStore(multiplayerStore, (state) => state.matchId);
   const roomStatus = useStore(multiplayerStore, (state) => state.room?.status ?? null);
   const isOnline = session !== null && matchId !== null && roomStatus === "playing";
+
+  const returnHome = (): void => {
+    if (isOnline && !window.confirm(translate(language, "exitOnlineConfirm"))) return;
+    if (isOnline) disposeSession();
+    navigate("/");
+  };
 
   useEffect(() => {
     const gameCanvas = canvas.current;
@@ -192,7 +199,7 @@ export default function GamePage() {
           type="button"
           aria-label={translate(language, "home")}
           title={translate(language, "home")}
-          onClick={() => navigate("/")}
+          onClick={returnHome}
         >
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M3 11l9-8 9 8M5 10v10h14V10" />
@@ -269,6 +276,9 @@ export default function GamePage() {
 
       <div id="ability-feedback" className="hud-ability-feedback" aria-live="polite" />
       <div id="score-effects" className="hud-score-effects" aria-hidden="true" />
+      <div id="fps" className="hud-fps" aria-label="实时帧率">
+        -- FPS
+      </div>
       <div id="drag-pad" className="drag-pad" aria-hidden="true">
         <div id="drag-knob" className="drag-knob" />
       </div>

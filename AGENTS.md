@@ -98,7 +98,7 @@ AGENTS.md                    # 本文件
 
 - **输入包**（guest → host，高频约 30Hz）：只携带 matchId、归一化输入方向、序号、客户端时间戳和技能意图，不携带任何位置/分数字段——这是硬性规则，位置和分数永远由 host 计算，不接受 guest 上报。
 - **状态增量**（host → guest，约 10Hz）：携带 `snapshotSeq`、`baseWorldRevision/worldRevision`、全部玩家当前状态和本次改变的世界对象。快照序号允许断层；世界 revision 不连续时通过 reliable channel 请求分块 checkpoint。checkpoint 包含全部玩家/道具/临时实体，以及所有偏离地图初始基线的物体；初始状态物体不传。
-- **信令消息**（客户端 ↔ 信令服务，WebSocket）：创建/进入房间、ready、SDP/ICE、固定对局计时和 4 秒 application heartbeat。WSS 在 playing 期间保持连接，但服务端只处理 heartbeat；游戏数据不经后端。
+- **信令消息**（客户端 ↔ 信令服务，WebSocket）：创建/进入房间、ready、SDP/ICE、固定对局计时和 4 秒 application heartbeat。WSS 在 playing 期间保持连接，服务端只处理 heartbeat 和主动 `leave-room`；游戏数据不经后端。
 - **存档协议**（客户端 ↔ 存档 API，HTTPS REST）：客户端本地生成 `{ playerId, secret }` 存 localStorage，所有存档读写请求必须带这对凭证校验；写入是"事件化"（如 `POST /save/coins { delta: +50 }`），不是客户端直接上报最终数值——这能降低但不能杜绝被篡改的风险，见第 8 节。
 
 ## 5. Skills 目录与使用规则

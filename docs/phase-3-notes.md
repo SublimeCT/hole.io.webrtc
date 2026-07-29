@@ -7,7 +7,7 @@
 - lobby 和 connecting 分别为 180 秒、30 秒；playing 固定 180 秒。
 - WebSocket 在对局中保持，客户端每 4 秒发 application heartbeat；超过 8 秒时 guest 移除、host 解散房间。
 - 所有玩家 ready 后 host 才能进入 connecting；SDP/ICE 强制只在 host↔guest 之间转发。
-- playing 阶段拒绝 heartbeat 以外的所有客户端 WSS 消息，游戏数据不经过后端。
+- playing 阶段只接受 heartbeat 和主动 `leave-room`，拒绝其他客户端 WSS 消息，游戏数据不经过后端。
 - 6 位去歧义房间码；不存在房间连续 5 次封 5 分钟、累计 10 次永久封禁。
 - TypeBox strict runtime schema 校验全部 WSS 入站消息，并限制 payload、消息速率、待处理队列、发送缓冲、origin 和连接数。
 - PostgreSQL + `@fastify/postgres` + Drizzle：持久化房间、对局 roster 和 IP 封禁，不记录高频游戏状态。
@@ -26,6 +26,12 @@
 - `snapshotCodec.ts` 实现 host↔guest 完整序列化：`stateToDeltaSnapshot`、`buildFullCheckpoint`、`splitCheckpointIntoChunks`、`applyDeltaToState`、`applyCheckpointToState`。
 - `MultiplayerProvider` Context 持久化 `MultiplayerSession`，跨 `/online`↔`/game` 路由导航不断线。
 - 颜色冲突检测改为模态弹窗（仅弹给受影响的非 host 玩家）；host 侧 ready check 后端已排除 host 自身。
+- 联机会话暂存路由懒加载期间到达的 reliable DataChannel 消息，guest 不会再因丢失 `match-start` 卡在 `00 / 00`。
+- 联机对局返回主页前要求确认；确认后发送 `leave-room` 并销毁会话，重新点击联机将建立新房间会话。
+- 房间邀请链接在 Clipboard API 不可用或被拒绝时使用 DOM 复制兜底。
+- `poop-hit` 通过 reliable DataChannel 定向标识被命中的 peer，guest 可触发本机粪便雨表现。
+- 游戏 HUD 左下显示实际渲染 FPS；联机排行榜头像使用各玩家圆环色和名称首字符。
+- 房间服务拒绝 NFKC 后不区分大小写的重复玩家名称，Online 表单同步即时校验。
 
 ## 已知限制
 

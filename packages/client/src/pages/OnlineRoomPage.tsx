@@ -123,6 +123,29 @@ function mapPlayers(peers: readonly RoomPeer[]): RoomPlayer[] {
     }));
 }
 
+async function copyText(text: string): Promise<void> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+  } catch {
+    // Clipboard API can be present but denied outside a secure context.
+  }
+
+  const input = document.createElement("textarea");
+  input.value = text;
+  input.readOnly = true;
+  input.style.position = "fixed";
+  input.style.left = "-9999px";
+  document.body.append(input);
+  input.select();
+  input.setSelectionRange(0, input.value.length);
+  const copied = document.execCommand("copy");
+  input.remove();
+  if (!copied) throw new Error("Unable to copy invite link");
+}
+
 export function OnlineRoomPage() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -196,7 +219,10 @@ export function OnlineRoomPage() {
   }, [settingsOpen]);
 
   useEffect(() => {
-    if (connectionError) showToast(connectionError);
+    if (connectionError) {
+      showToast(connectionError);
+      if (connectionError === "该玩家名称已被使用，请更换名称") setSettingsOpen(true);
+    }
   }, [connectionError, showToast]);
 
   useEffect(() => {
@@ -219,10 +245,10 @@ export function OnlineRoomPage() {
     if (room === null) return;
     const inviteUrl = `${window.location.origin}${window.location.pathname}#/online?room=${room.roomCode}`;
     try {
-      await navigator.clipboard.writeText(inviteUrl);
+      await copyText(inviteUrl);
       showToast("邀请链接已复制");
     } catch {
-      showToast(`房间代码：${room.roomCode}`);
+      showToast("复制失败，请检查浏览器剪贴板权限");
     }
   };
 
@@ -243,6 +269,15 @@ export function OnlineRoomPage() {
       nameInput.current?.setCustomValidity(
         "玩家名称需为 2 至 10 个字符，且只能包含文字、数字、空格、短横线或下划线",
       );
+      nameInput.current?.reportValidity();
+      return;
+    }
+    const nameKey = name.toLocaleLowerCase();
+    const duplicateName = enteredPlayers.some(
+      (peer) => peer.peerId !== peerId && peer.profile.playerName.toLocaleLowerCase() === nameKey,
+    );
+    if (duplicateName) {
+      nameInput.current?.setCustomValidity("玩家名称不能与房间内其他玩家重复");
       nameInput.current?.reportValidity();
       return;
     }
@@ -352,7 +387,7 @@ export function OnlineRoomPage() {
             <button
               className="online-icon-btn"
               type="button"
-              disabled={room?.status !== "lobby"}
+              disabled={signalingStatus !== "open" || (room !== null && room.status !== "lobby")}
               aria-label="玩家设置"
               title="玩家设置"
               onClick={() => setSettingsOpen(true)}
@@ -521,7 +556,8 @@ export function OnlineRoomPage() {
               <div className="online-swatches">
                 {RING_COLORS.map((color) => {
                   const occupied = players.some(
-                    (player) => player.id !== peerId && player.color === color,
+                    (player) =>
+                      player.id !== peerId && player.color.toUpperCase() === color.toUpperCase(),
                   );
                   return (
                     <button

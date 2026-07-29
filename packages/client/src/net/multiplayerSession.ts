@@ -25,6 +25,7 @@ export class MultiplayerSession {
   private gameMessageHandler:
     | ((peerId: PeerId, channel: GameChannelKind, data: string) => void)
     | null = null;
+  private pendingReliableGameMessages: Array<{ peerId: PeerId; data: string }> = [];
 
   constructor(options: MultiplayerSessionOptions) {
     this.profile = options.profile;
@@ -50,7 +51,11 @@ export class MultiplayerSession {
       onPeerStatus: (peerId, status) =>
         multiplayerStore.getState().setPeerConnection(peerId, status),
       onChannelMessage: (peerId, channel, data) => {
-        this.gameMessageHandler?.(peerId, channel, data);
+        if (this.gameMessageHandler !== null) {
+          this.gameMessageHandler(peerId, channel, data);
+        } else if (channel === "reliable") {
+          this.pendingReliableGameMessages.push({ peerId, data });
+        }
       },
       onHostReady: () => {
         this.signaling.send({ type: "start-match" });
@@ -78,6 +83,9 @@ export class MultiplayerSession {
     handler: ((peerId: PeerId, channel: GameChannelKind, data: string) => void) | null,
   ): void {
     this.gameMessageHandler = handler;
+    if (handler === null || this.pendingReliableGameMessages.length === 0) return;
+    const pending = this.pendingReliableGameMessages.splice(0);
+    for (const message of pending) handler(message.peerId, "reliable", message.data);
   }
 
   /** 在指定 DataChannel 上向 peerId 发送已编码文本。 */
@@ -96,6 +104,14 @@ export class MultiplayerSession {
 
   updateProfile(profile: PlayerProfile): void {
     this.profile = profile;
+    if (multiplayerStore.getState().room === null && this.requestedRoomCode !== null) {
+      this.signaling.send({
+        type: "enter-room",
+        roomCode: this.requestedRoomCode,
+        profile,
+      });
+      return;
+    }
     this.signaling.send({ type: "update-profile", profile });
   }
 
@@ -106,6 +122,7 @@ export class MultiplayerSession {
   dispose(sendLeave: boolean): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.pendingReliableGameMessages = [];
     this.peerConnections.close();
     this.signaling.close(sendLeave);
   }
@@ -191,6 +208,7 @@ function roomErrorMessage(code: RoomErrorCode): string {
     INVALID_MESSAGE: "发送的房间消息格式无效",
     ROOM_UNAVAILABLE: "房间不存在、已满或当前无法加入",
     ROOM_FULL: "房间人数已满",
+    PLAYER_NAME_TAKEN: "该玩家名称已被使用，请更换名称",
     ROOM_LIMIT_REACHED: "服务器房间数量已达到上限",
     ALREADY_IN_ROOM: "你已经在另一个房间中",
     NOT_IN_ROOM: "你当前不在房间中",

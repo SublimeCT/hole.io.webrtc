@@ -104,6 +104,27 @@ describe("RoomService", () => {
     });
   });
 
+  it("rejects duplicate player names when entering or updating a lobby", async () => {
+    const service = new RoomService(new MemoryPersistence(), () => 1_000);
+    const host = "host" as PeerId;
+    const guest = "guest" as PeerId;
+    const otherGuest = "other-guest" as PeerId;
+    const created = await service.createRoom(host, profile("Player One"));
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    expect(service.enterRoom(created.value.code, guest, profile("player one"))).toEqual({
+      ok: false,
+      error: "PLAYER_NAME_TAKEN",
+    });
+    expect(service.enterRoom(created.value.code, guest, profile("Player Two")).ok).toBe(true);
+    expect(service.enterRoom(created.value.code, otherGuest, profile("Player 3")).ok).toBe(true);
+    expect(service.updateProfile(otherGuest, profile("PLAYER TWO"))).toEqual({
+      ok: false,
+      error: "PLAYER_NAME_TAKEN",
+    });
+  });
+
   it("rejects profile updates after WebRTC connection setup starts", async () => {
     const service = new RoomService(new MemoryPersistence(), () => 1_000);
     const host = "host" as PeerId;

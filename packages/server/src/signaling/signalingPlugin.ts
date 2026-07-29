@@ -54,6 +54,8 @@ function errorMessage(code: RoomErrorCode): string {
       return "room unavailable";
     case "ROOM_LIMIT_REACHED":
       return "room limit reached";
+    case "PLAYER_NAME_TAKEN":
+      return "player name is already in use";
     case "ALREADY_IN_ROOM":
       return "already in a room";
     case "NOT_IN_ROOM":
@@ -65,7 +67,7 @@ function errorMessage(code: RoomErrorCode): string {
     case "INVALID_STATE":
       return "action is not allowed in the current room state";
     case "MATCH_IN_PROGRESS":
-      return "only heartbeat messages are accepted while playing";
+      return "only heartbeat and leave-room messages are accepted while playing";
     case "SIGNAL_NOT_ALLOWED":
       return "signal target is not allowed";
     case "RATE_LIMITED":
@@ -199,7 +201,11 @@ const signalingPlugin: FastifyPluginAsync<SignalingOptions> = async (app, opts) 
     message: ClientToServerMessage,
   ): Promise<void> => {
     const currentRoom = roomService.roomForPeer(connection.peerId);
-    if (currentRoom?.status === "playing" && message.type !== "heartbeat") {
+    if (
+      currentRoom?.status === "playing" &&
+      message.type !== "heartbeat" &&
+      message.type !== "leave-room"
+    ) {
       sendError(connection, "MATCH_IN_PROGRESS");
       return;
     }
@@ -232,6 +238,10 @@ const signalingPlugin: FastifyPluginAsync<SignalingOptions> = async (app, opts) 
         const roomExisted = roomService.getRoom(message.roomCode) !== undefined;
         const result = roomService.enterRoom(message.roomCode, connection.peerId, profile);
         if (!result.ok) {
+          if (result.error === "PLAYER_NAME_TAKEN") {
+            sendError(connection, result.error);
+            return;
+          }
           if (!roomExisted) {
             const access = await app.accessService.recordMissingRoom(connection.ip);
             if (!access.allowed) rejectIpConnections(connection.ip);
