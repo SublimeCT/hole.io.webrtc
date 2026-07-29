@@ -53,9 +53,8 @@ jobs:
       - name: Deploy
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
         run: |
-          SSH="ssh -i ~/.ssh/deploy_key -p ${DEPLOY_PORT} -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes"
-          rsync -az --delete --delay-updates -e "$SSH" .deploy/ "${DEPLOY_USER}@${DEPLOY_HOST}:/srv/holeio-server-dist/"
-          $SSH "${DEPLOY_USER}@${DEPLOY_HOST}" "sudo -n /usr/bin/systemctl restart holeio-server.service"
+          # SSH 端口固定 22、部署用户固定 deploy-holeio（见 docs/deploy.md），无需配置为 secret。
+          SSH="ssh -i ~/.ssh/deploy_key -p 22 -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes"
+          rsync -az --delete --delay-updates -e "$SSH" .deploy/ "deploy-holeio@${DEPLOY_HOST}:/srv/holeio-server-dist/"
+          $SSH "deploy-holeio@${DEPLOY_HOST}" "sudo -n /usr/bin/systemctl restart holeio-server.service"
