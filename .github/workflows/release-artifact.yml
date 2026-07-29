@@ -20,6 +20,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Verify deploy secrets
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          if [ -z "$DEPLOY_HOST" ] || [ -z "$DEPLOY_SSH_KEY" ] || [ -z "$DEPLOY_KNOWN_HOSTS" ]; then
+            echo "::error::缺少部署 secret。本 job 为 environment: production，只读『环境级 secret』，读不到 repo 级 secret。到 Settings → Environments → production 添加 DEPLOY_HOST / DEPLOY_SSH_KEY / DEPLOY_KNOWN_HOSTS 三个环境 secret 后重试。"
+            exit 1
+          fi
+
       - uses: pnpm/action-setup@v4
         with:
           version: 10.4.1
@@ -49,6 +60,14 @@ jobs:
           printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
           printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
           chmod 0600 ~/.ssh/deploy_key
+          if ! ssh-keygen -y -f ~/.ssh/deploy_key >/dev/null 2>&1; then
+            echo "::error::DEPLOY_SSH_KEY 不是有效私钥（常见：粘成了 .pub 公钥、缺 BEGIN/END 行、换行被吞）。用 \`cat ~/.ssh/github_actions_ed25519\` 取私钥全文后 Update 该 secret。"
+            exit 1
+          fi
+          if [ ! -s ~/.ssh/known_hosts ]; then
+            echo "::error::DEPLOY_KNOWN_HOSTS 为空。用 \`ssh-keyscan -t ed25519 <host> 2>/dev/null | grep ssh-ed25519\` 取后 Update。"
+            exit 1
+          fi
 
       - name: Deploy
         env:
@@ -57,4 +76,8 @@ jobs:
           # SSH 端口固定 22、部署用户固定 deploy-holeio（见 docs/deploy.md），无需配置为 secret。
           SSH="ssh -i ~/.ssh/deploy_key -p 22 -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes"
           rsync -az --delete --delay-updates -e "$SSH" .deploy/ "deploy-holeio@${DEPLOY_HOST}:/srv/holeio-server-dist/"
-          $SSH "deploy-holeio@${DEPLOY_HOST}" "sudo -n /usr/bin/systemctl restart holeio-server.service"
+          if ! $SSH "deploy-holeio@${DEPLOY_HOST}" "sudo -n /usr/bin/systemctl restart holeio-server.service"; then
+            echo "::error::holeio-server.service 启动失败，服务状态与最近日志（读 status 无需 sudo）："
+            $SSH "deploy-holeio@${DEPLOY_HOST}" "systemctl status holeio-server.service --no-pager -l || true"
+            exit 1
+          fi

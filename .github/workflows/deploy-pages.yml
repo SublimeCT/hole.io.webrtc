@@ -36,6 +36,8 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build client
+        env:
+          PAGES_BUILD: "1"
         run: pnpm --filter @hole-io/client build
 
       - name: Configure Pages

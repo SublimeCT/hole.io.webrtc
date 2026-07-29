@@ -136,7 +136,10 @@ function accessBlockedMessage(payload: unknown): string {
 export function resolveSignalingUrl(): string {
   const configured = import.meta.env.VITE_SIGNALING_URL?.trim();
   if (configured) return configured;
-  if (import.meta.env.DEV) return `ws://${window.location.hostname}:3001/ws`;
+  if (import.meta.env.DEV) {
+    const devPort = import.meta.env.VITE_DEV_API_PORT || 3001;
+    return `ws://${window.location.hostname}:${devPort}/ws`;
+  }
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   return `${protocol}//${window.location.host}/ws`;
 }

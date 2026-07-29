@@ -68,6 +68,85 @@ sudo systemctl daemon-reload
 sudo systemctl enable holeio-server.service
 ```
 
+> 之后每次编辑该 unit 文件，都要先 `sudo systemctl daemon-reload` 再 `restart`，否则改了不生效（systemctl 会报 "unit file ... changed on disk"）。改 `/etc/holeio/server.env` 不需要 daemon-reload，直接 `restart holeio-server.service`；改 `/etc/turnserver.conf` 则 `restart coturn`。
+
+## 配置 nginx
+
+nginx 负责：HTTPS 静态前端 + 反代 `/access-status` 和 `/ws`（信令 WebSocket）到本机 Fastify（默认 3001）。TURN 不走 nginx（coturn 直连 3478）。客户端生产环境连 `wss://<当前域名>/ws`，连前先 `GET /access-status`（[signaling.ts](../packages/client/src/net/signaling.ts)）；前后端同域，无 CORS 问题。
+
+1. 写 `/etc/nginx/sites-available/holeio`（`<your-domain>` 换成你的域名）
+
+```nginx
+upstream holeio_backend {
+    server 127.0.0.1:3001;
+    keepalive 16;
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name <your-domain>;
+    location /.well-known/acme-challenge/ { root /var/www/html; }
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name <your-domain>;
+
+    ssl_certificate     /etc/letsencrypt/live/<your-domain>/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/<your-domain>/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+    root /srv/holeio-server-dist/client;
+    index index.html;
+
+    gzip on;
+    gzip_types text/css application/javascript application/json image/svg+xml;
+    gzip_min_length 1024;
+
+    location = /access-status {
+        proxy_pass http://holeio_backend;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location = /ws {
+        proxy_pass http://holeio_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
+```
+
+2. 启用、取证书、重载
+
+```bash
+sudo apt-get install -y nginx certbot python3-certbot-nginx
+sudo rm -f /etc/nginx/sites-enabled/default
+sudo ln -s /etc/nginx/sites-available/holeio /etc/nginx/sites-enabled/holeio
+sudo certbot certonly --nginx -d <your-domain>
+sudo nginx -t
+sudo systemctl reload nginx
+sudo certbot renew --dry-run
+```
+
+> 前提：域名 A 记录已指向本机公网 IP。已有该域名的 nginx server 块时，只需往里加 `upstream` 和三个 `location`（`/access-status`、`/ws`、`/`），不必新建文件。`proxy_read_timeout 3600s` 必须有（默认 60s 会掐断空闲 WebSocket）；`X-Forwarded-For` 必须透传，否则 Fastify（`TRUST_PROXY` 默认信任 127.0.0.1）拿不到真实客户端 IP，单 IP 连接数限制会全员挤成 nginx 的 IP。
+
 ## 配置 TURN
 
 1. 生成共享 secret（≥32 字符）
@@ -102,15 +181,24 @@ sudo ufw allow 49160:49260/udp
 sudo systemctl enable --now coturn
 ```
 
-5. 在 `/etc/holeio/server.env` 追加（`TURN_SECRET` 必须等于 coturn 的 `static-auth-secret`）
+> 主机层（ufw）只是其中一层。阿里云等云厂商还有一层**安全组**（网络层，流量进实例前先过它）：控制台 ECS → 实例 → 安全组 → 入方向，同样放行 `3478/tcp`、`3478/udp`、`49160/49260/udp`，源 `0.0.0.0/0`。安全组不放行，ufw 配了也没用——流量根本到不了机器。
 
-```text
+5. 写环境文件 `/etc/holeio/server.env`（**必须在 `/srv` 之外**：`/srv/holeio-server-dist/` 整棵树由 rsync 每次部署 `--delete` 覆盖，配置放里面会被冲掉。systemd 的 `EnvironmentFile=` 从这里把变量注入进程环境，rsync 永远碰不到它）
+
+```bash
+sudo install -d -m 0755 /etc/holeio
+sudo tee /etc/holeio/server.env > /dev/null <<'EOF'
+DATABASE_URL=postgres://holeio:<密码>@localhost:5432/holeio
 TURN_SECRET=<第 1 步生成的 secret>
 STUN_URIS=stun:<公网IP或域名>:3478
 TURN_URIS=turn:<公网IP或域名>:3478?transport=udp
+EOF
+sudo chmod 600 /etc/holeio/server.env
 ```
 
-> `TURN_TTL_SECONDS`（默认 3600）、`TURN_REALM`（默认 hole.io）可不写。
+`TURN_SECRET` 必须等于 coturn 的 `static-auth-secret`。`TURN_TTL_SECONDS`（默认 3600）、`TURN_REALM`（默认 hole.io）可不写。dev 用工作目录的 `.env`/`.env.local`，prod 用这个 `EnvironmentFile`，两套互不干扰。
+
+> URI 里填域名（而非 IP）时，只需在 DNS 加一条 A 记录指向服务器公网 IP，服务器无需额外配置——域名由玩家浏览器解析，信令服务原样透传 URI，coturn 只认端口。
 
 6. 验证
 
