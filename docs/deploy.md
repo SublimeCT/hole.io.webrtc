@@ -223,6 +223,23 @@ sudo systemctl status coturn
 
 浏览器打开 <https://webrtc.github.io/samples/src/content/peerconnection/trickle-ice/>，填入 `STUN_URIS`/`TURN_URIS` + 信令下发的凭证，确认出现 `relay` 类型 candidate。
 
+### TURN 使用 5349 端口
+
+移动运营商通常会封禁 3478 端口, 可以使用 5349 端口
+
+以 `certbot` 生成的证书为例, 需要将通配符证书的公钥和私钥文件复制到 `/etc/` 下:
+
+- `/etc/turnserver_cert.pem`
+- `/etc/turnserver_privkey.pem`
+
+这个路径可以是任意路径,
+
+```bash
+# 开放 TCP 5349 端口
+sudo ufw allow 5349/tcp
+sudo ufw reload
+```
+
 ## 配置 GitHub Actions
 
 在 GitHub 仓库 → Settings → Environments → `production` → Add environment secret 添加以下三个。工作流 [release-artifact.yml](../.github/workflows/release-artifact.yml) 用它们做 SSH 免密上传 + 远程重启服务。

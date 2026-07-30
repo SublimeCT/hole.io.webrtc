@@ -20,8 +20,8 @@ const turn = {
   username: "expires:peer",
   credential: "credential",
   ttl: 3_600,
-  stunUris: ["stun:game.example.com:3478"],
-  uris: ["turn:game.example.com:3478?transport=udp"],
+  stunUris: ["stun:game.example.com:5349"],
+  uris: ["turn:game.example.com:5349?transport=udp"],
 };
 
 describe("signaling protocol", () => {

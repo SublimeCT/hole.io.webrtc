@@ -2,8 +2,8 @@ import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { generateTurnCredentials } from "./turn.js";
 
-const URIS = ["turn:localhost:3478?transport=udp", "turn:localhost:3478?transport=tcp"];
-const STUN_URIS = ["stun:localhost:3478"];
+const URIS = ["turn:localhost:5349?transport=udp", "turn:localhost:5349?transport=tcp"];
+const STUN_URIS = ["stun:localhost:5349"];
 const SECRET = "test-turn-secret-that-is-at-least-32-chars";
 
 describe("generateTurnCredentials", () => {
