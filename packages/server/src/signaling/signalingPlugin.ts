@@ -454,7 +454,9 @@ const signalingPlugin: FastifyPluginAsync<SignalingOptions> = async (app, opts) 
         const count = (connectionCountByIp.get(connection.ip) ?? 1) - 1;
         if (count <= 0) connectionCountByIp.delete(connection.ip);
         else connectionCountByIp.set(connection.ip, count);
-        // 不立即修改房间；由 8 秒 application heartbeat 超时统一裁决 host/guest 掉线。
+        // guest 断开立即移除成员（支持刷新页面/掉线后同名重新进入房间）；host 仍由 heartbeat
+        // 超时统一裁决并解散房间，避免短暂抖动误解散。
+        for (const event of roomService.handleGuestDisconnect(peerId)) publishEvent(event);
       });
     },
   );

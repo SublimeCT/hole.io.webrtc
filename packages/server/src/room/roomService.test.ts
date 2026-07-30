@@ -189,4 +189,31 @@ describe("RoomService", () => {
 
     expect(service.kickPeer(host, guest)).toEqual({ ok: false, error: "INVALID_STATE" });
   });
+
+  it("removes a guest on disconnect so the same name can re-enter, but leaves host alone", async () => {
+    const service = new RoomService(new MemoryPersistence(), () => 1_000);
+    const host = "host" as PeerId;
+    const guest = "guest" as PeerId;
+    const created = await service.createRoom(host, profile("Host"));
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    expect(service.enterRoom(created.value.code, guest, profile("Guest")).ok).toBe(true);
+
+    const events = service.handleGuestDisconnect(guest);
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: "room-state",
+        room: expect.objectContaining({ roomCode: created.value.code }),
+      }),
+    ]);
+    expect(service.roomForPeer(guest)).toBeUndefined();
+
+    // 旧 member 已移除，同名重新进入不再被 PLAYER_NAME_TAKEN 拒绝（guest 刷新场景）。
+    const reJoined = "rejoined" as PeerId;
+    expect(service.enterRoom(created.value.code, reJoined, profile("Guest")).ok).toBe(true);
+
+    // host 断开不在此处理（仍由 heartbeat 超时解散房间）。
+    expect(service.handleGuestDisconnect(host)).toEqual([]);
+    expect(service.getRoom(created.value.code)).toBeDefined();
+  });
 });

@@ -186,8 +186,9 @@ export class MultiplayerSession {
         multiplayerStore.getState().setMatch(message.matchId);
         return;
       case "match-ended":
-        this.peerConnections.close();
-        multiplayerStore.getState().clearPeerConnections();
+        // 连接保活：房间内建立的 WebRTC 连接在 lobby→playing→lobby 整个生命周期复用，
+        // 对局结束只复位 matchId 并重新 enter-room 让服务端复位房间 roster；随后 sync 会保留
+        // 已有连接、只为新出现的对端建连。只有离开房间（dispose）或房间解散（room-closed）才断开。
         multiplayerStore.getState().setMatch(null);
         this.signaling.send({
           type: "enter-room",

@@ -322,6 +322,22 @@ export class RoomService {
     return [{ type: "room-state", room: this.state(room), recipients: this.recipients(room) }];
   }
 
+  /**
+   * guest 信令连接断开时立即移除其成员记录（host 不在此处理，仍由 heartbeat 超时解散房间）。
+   * 这样 guest 刷新页面或掉线后能用同名重新 enter-room，而不会因旧 member 残留被 PLAYER_NAME_TAKEN
+   * 拒绝。仅改内存态（成员记录不持久化），返回需广播的 room-state 事件。
+   */
+  handleGuestDisconnect(peerId: PeerId): RoomEvent[] {
+    const room = this.roomForPeer(peerId);
+    if (room === undefined) return [];
+    if (room.hostPeerId === peerId) return [];
+    const member = room.members.get(peerId);
+    if (member === undefined) return [];
+    room.members.delete(peerId);
+    this.peerRooms.delete(peerId);
+    return [{ type: "room-state", room: this.state(room), recipients: this.recipients(room) }];
+  }
+
   async closeByHost(peerId: PeerId): Promise<RoomResult<RoomEvent>> {
     const room = this.roomForPeer(peerId);
     if (room === undefined) return { ok: false, error: "NOT_IN_ROOM" };

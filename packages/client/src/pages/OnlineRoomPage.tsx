@@ -194,6 +194,7 @@ export function OnlineRoomPage() {
   const peerConnectionTypes = useStore(multiplayerStore, (state) => state.peerConnectionTypes);
   const connectionError = useStore(multiplayerStore, (state) => state.error);
   const matchId = useStore(multiplayerStore, (state) => state.matchId);
+  const termination = useStore(multiplayerStore, (state) => state.termination);
 
   const players = room === null ? [] : mapPlayers(room.peers);
   const positions = getPositions(players.length);
@@ -285,18 +286,22 @@ export function OnlineRoomPage() {
   }, [settingsOpen, preferences.renderFrameRate]);
 
   useEffect(() => {
-    if (connectionError) {
-      showToast(connectionError);
-      if (connectionError === "该玩家名称已被使用，请更换名称") {
-        setSettingsError(connectionError);
-        setSettingsOpen(true);
-      }
-      if (connectionError === "你已被房主移出房间") {
-        disposeSession();
-        navigate({ pathname: "/", search: "" }, { replace: true });
-      }
+    if (!connectionError) return;
+    showToast(connectionError);
+    if (connectionError === "该玩家名称已被使用，请更换名称") {
+      setSettingsError(connectionError);
+      setSettingsOpen(true);
     }
-  }, [connectionError, showToast, disposeSession, navigate]);
+    // 房间解散/被踢等终止场景由下方 termination effect 统一回主页。
+  }, [connectionError, showToast]);
+
+  // 房间解散（idle 超时 / host 掉线 / 服务端关闭）或被踢：termination 置位即销毁会话回主页，
+  // 不停留在房间页显示「房间代码 ------」。
+  useEffect(() => {
+    if (termination === null) return;
+    disposeSession();
+    navigate({ pathname: "/", search: "" }, { replace: true });
+  }, [termination, disposeSession, navigate]);
 
   useEffect(() => {
     if (colorConflictMessage === null) return;
