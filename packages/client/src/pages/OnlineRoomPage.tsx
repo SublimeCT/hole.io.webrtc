@@ -21,6 +21,7 @@ import {
   RENDER_FRAME_RATES,
   type RenderFrameRate,
 } from "../app/preferences";
+import { clearRoomRole, readRoomRole } from "../app/roomRole";
 import { createPlayerProfile } from "../net/multiplayerSession";
 import { useMultiplayer } from "../net/MultiplayerProvider";
 import { multiplayerStore } from "../store/multiplayerStore";
@@ -246,19 +247,24 @@ export function OnlineRoomPage() {
 
   useEffect(() => {
     if (session !== null || !profileReady) return;
+    // 房主刷新页面 = 退出房间：旧房间由服务端心跳超时（host-timeout）解散，
+    // 本端回主页、不重新进入旧房间。guest 刷新页面 = 重新进入房间，落入下方 ensureSession。
+    const savedRole = readRoomRole();
+    if (
+      savedRole !== null &&
+      savedRole.role === "host" &&
+      initialRoomCode !== null &&
+      savedRole.roomCode === initialRoomCode
+    ) {
+      clearRoomRole();
+      navigate({ pathname: "/", search: "" }, { replace: true });
+      return;
+    }
     ensureSession({
       roomCode: initialRoomCode,
       profile: initialProfile.current,
     });
-  }, [session, ensureSession, initialRoomCode, profileReady]);
-
-  // 进入或返回房间时主动测试 WebRTC 星型连接：覆盖对局结束从结算页回 lobby、
-  // 首次进入已存在房间等场景，避免连接没建上时卡死（连接同步仅由 room-state 驱动，
-  // 而返回房间页时这些消息早已处理完毕）。connecting/playing 状态不触发，避免打断对局。
-  useEffect(() => {
-    if (session === null || room?.status !== "lobby") return;
-    session.resyncConnections();
-  }, [session, room?.status]);
+  }, [session, ensureSession, initialRoomCode, profileReady, navigate]);
 
   useEffect(() => {
     if (room?.status === "playing") navigate("/game", { replace: true });

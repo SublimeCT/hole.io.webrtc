@@ -6,6 +6,7 @@ import type {
   ServerToClientMessage,
 } from "@hole-io/shared/protocol";
 import { multiplayerStore } from "../store/multiplayerStore";
+import { clearRoomRole, writeRoomRole } from "../app/roomRole";
 import { SignalingClient, resolveSignalingUrl } from "./signaling";
 import { StarConnectionManager, type GameChannelKind } from "./starConnection";
 
@@ -130,24 +131,9 @@ export class MultiplayerSession {
     if (this.disposed) return;
     this.disposed = true;
     this.pendingReliableGameMessages = [];
+    clearRoomRole();
     this.peerConnections.close();
     this.signaling.close(sendLeave);
-  }
-
-  /**
-   * 主动重建星型 WebRTC 连接：基于当前 store 的 room/turn/peerId 关闭现有连接并重新同步。
-   * 用于「进入或返回房间即测试连接」——对局结束返回 lobby、首次进入已存在房间等场景下，
-   * 即便此前的 room-state 已在 /results 期间处理完、连接没建上，也能在此强制重试。
-   * 仅在已具备 room/peerId/turn 时执行，否则静默跳过。
-   */
-  resyncConnections(): void {
-    if (this.disposed) return;
-    const state = multiplayerStore.getState();
-    const room = state.room;
-    if (room === null || state.peerId === null || state.turn === null) return;
-    this.peerConnections.close();
-    state.clearPeerConnections();
-    void this.syncPeerConnections(room, state.turn);
   }
 
   private async handleMessage(message: ServerToClientMessage): Promise<void> {
@@ -166,11 +152,21 @@ export class MultiplayerSession {
         }
         return;
       case "room-created":
-      case "room-entered":
+        writeRoomRole(message.room.roomCode, "host");
         this.requestedRoomCode = message.room.roomCode;
         multiplayerStore.getState().setRoom(message.room, message.turn);
         await this.syncPeerConnections(message.room, message.turn);
         return;
+      case "room-entered": {
+        // 对局结束房主重新 enter 也走本分支，故按房间内自己的 isHost 标记判定角色。
+        const localPeerId = multiplayerStore.getState().peerId;
+        const self = message.room.peers.find((peer) => peer.peerId === localPeerId);
+        writeRoomRole(message.room.roomCode, self?.isHost ? "host" : "guest");
+        this.requestedRoomCode = message.room.roomCode;
+        multiplayerStore.getState().setRoom(message.room, message.turn);
+        await this.syncPeerConnections(message.room, message.turn);
+        return;
+      }
       case "room-state":
         multiplayerStore.getState().setRoom(message.room);
         await this.syncPeerConnections(message.room);
@@ -200,6 +196,7 @@ export class MultiplayerSession {
         });
         return;
       case "room-closed":
+        clearRoomRole();
         this.peerConnections.close();
         this.signaling.close(false); // 停止心跳
         multiplayerStore.getState().clearRoom();
