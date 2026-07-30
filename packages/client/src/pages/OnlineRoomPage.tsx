@@ -14,7 +14,13 @@ import {
 } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useStore } from "zustand";
-import { hasPersistedPlayerName, loadPreferences, persistPreferences } from "../app/preferences";
+import {
+  hasPersistedPlayerName,
+  loadPreferences,
+  persistPreferences,
+  RENDER_FRAME_RATES,
+  type RenderFrameRate,
+} from "../app/preferences";
 import { createPlayerProfile } from "../net/multiplayerSession";
 import { useMultiplayer } from "../net/MultiplayerProvider";
 import { multiplayerStore } from "../store/multiplayerStore";
@@ -162,6 +168,9 @@ export function OnlineRoomPage() {
   );
   const [draftName, setDraftName] = useState(preferences.playerName);
   const [draftColor, setDraftColor] = useState(preferences.playerRingColor);
+  const [draftRenderFrameRate, setDraftRenderFrameRate] = useState<RenderFrameRate>(
+    preferences.renderFrameRate,
+  );
   const [toast, setToast] = useState("");
   const [qrDataUrl, setQrDataUrl] = useState("");
   const nameInput = useRef<HTMLInputElement>(null);
@@ -243,6 +252,14 @@ export function OnlineRoomPage() {
     });
   }, [session, ensureSession, initialRoomCode, profileReady]);
 
+  // 进入或返回房间时主动测试 WebRTC 星型连接：覆盖对局结束从结算页回 lobby、
+  // 首次进入已存在房间等场景，避免连接没建上时卡死（连接同步仅由 room-state 驱动，
+  // 而返回房间页时这些消息早已处理完毕）。connecting/playing 状态不触发，避免打断对局。
+  useEffect(() => {
+    if (session === null || room?.status !== "lobby") return;
+    session.resyncConnections();
+  }, [session, room?.status]);
+
   useEffect(() => {
     if (room?.status === "playing") navigate("/game", { replace: true });
   }, [room?.status, navigate]);
@@ -256,8 +273,10 @@ export function OnlineRoomPage() {
   }, [room?.roomCode, location.search, navigate]);
 
   useEffect(() => {
-    if (settingsOpen) nameInput.current?.focus();
-  }, [settingsOpen]);
+    if (!settingsOpen) return;
+    nameInput.current?.focus();
+    setDraftRenderFrameRate(preferences.renderFrameRate);
+  }, [settingsOpen, preferences.renderFrameRate]);
 
   useEffect(() => {
     if (connectionError) {
@@ -309,6 +328,27 @@ export function OnlineRoomPage() {
     } catch {
       showToast("复制失败，请检查浏览器剪贴板权限");
     }
+  };
+
+  const shareInvite = async (): Promise<void> => {
+    if (room === null) return;
+    const url = inviteUrlString(room.roomCode);
+    if (typeof navigator !== "undefined" && typeof navigator.share === "function") {
+      try {
+        await navigator.share({
+          title: "VOID 联机房间",
+          text: "来深渊吞噬 VOID，和我一较高下：",
+          url,
+        });
+        showToast("已打开分享");
+      } catch (error) {
+        // 用户取消分享（AbortError）静默；其余异常回退到复制邀请链接。
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        await copyInvite();
+      }
+      return;
+    }
+    await copyInvite();
   };
 
   const kickPlayer = (player: RoomPlayer): void => {
@@ -385,7 +425,12 @@ export function OnlineRoomPage() {
       setSettingsError("该颜色已被房间内其他玩家使用，请选择可用颜色。");
       return;
     }
-    const nextPreferences = { ...preferences, playerName: name, playerRingColor: draftColor };
+    const nextPreferences = {
+      ...preferences,
+      playerName: name,
+      playerRingColor: draftColor,
+      renderFrameRate: draftRenderFrameRate,
+    };
     const profile = createPlayerProfile({
       playerName: name,
       color: draftColor,
@@ -465,6 +510,20 @@ export function OnlineRoomPage() {
             </div>
           </div>
           <div className="online-top-actions">
+            <button
+              className="online-icon-btn online-share-btn"
+              type="button"
+              disabled={room === null}
+              aria-label="分享邀请"
+              title="分享邀请"
+              onClick={() => void shareInvite()}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 3v12" />
+                <path d="M8 7l4-4 4 4" />
+                <path d="M5 14v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4" />
+              </svg>
+            </button>
             <button
               className="online-ghost-btn"
               type="button"
@@ -722,6 +781,26 @@ export function OnlineRoomPage() {
                     />
                   );
                 })}
+              </div>
+            </div>
+            <div className="online-segment-group">
+              <span>渲染帧率</span>
+              <div className="online-segmented">
+                {RENDER_FRAME_RATES.map((frameRate) => (
+                  <label
+                    key={frameRate}
+                    className={`online-segment ${draftRenderFrameRate === frameRate ? "is-on" : ""}`}
+                  >
+                    <input
+                      type="radio"
+                      name="online-render-frame-rate"
+                      value={frameRate}
+                      checked={draftRenderFrameRate === frameRate}
+                      onChange={() => setDraftRenderFrameRate(frameRate)}
+                    />
+                    <span>{frameRate} fps</span>
+                  </label>
+                ))}
               </div>
             </div>
             <div className="online-modal-actions">

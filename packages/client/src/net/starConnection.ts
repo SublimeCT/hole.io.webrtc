@@ -80,8 +80,12 @@ export class StarConnectionManager {
 
   async sync(room: RoomState, localPeerId: PeerId, turn: TurnCredentials): Promise<void> {
     this.turn = turn;
-    const host = room.peers.find((peer) => peer.isHost && peer.entered);
-    if (host === undefined) throw new Error("房间缺少已进入的房主");
+    const host = room.peers.find((peer) => peer.isHost);
+    if (host === undefined) throw new Error("房间缺少房主");
+    // 对局刚结束时服务端会把房主置为 entered=false（见 roomService sweep），各客户端随后才各自
+    // 重新 enter-room。若本端先于房主重新 enter 而收到 room-state，此时房主尚未 entered，应静默
+    // 等待房主重新 enter 后的 room-state 再次触发 sync，而不是抛出假错误阻断星型连接重建。
+    if (!host.entered) return;
     const hostChanged = this.hostPeerId !== null && this.hostPeerId !== host.peerId;
     const hostModeChanged =
       this.hostPeerId !== null && this.isHost !== (host.peerId === localPeerId);

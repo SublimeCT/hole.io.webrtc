@@ -118,6 +118,11 @@
   place-items: center;
 }
 
+/* 移动端专属分享入口：桌面端隐藏（桌面保留「复制邀请链接/二维码」文字按钮）。 */
+.online-share-btn {
+  display: none;
+}
+
 .online-ghost-btn {
   padding: 0 15px;
   font-weight: 700;
@@ -625,6 +630,67 @@
   transform: rotate(-45deg);
 }
 
+/* 独立于 .online-field：避免 .online-field label / .online-field input 后代选择器污染
+   segment 内部的 label 与 radio（名称输入框的样式只应作用于文本输入框）。 */
+.online-segment-group {
+  margin-bottom: 18px;
+}
+
+.online-segment-group > span {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.online-segmented {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: 11px;
+  background: var(--bg);
+}
+
+.online-segment {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  min-height: 42px;
+  border-radius: 7px;
+  color: var(--muted);
+  cursor: pointer;
+  font-family: var(--font-display);
+  font-size: 14px;
+  font-weight: 700;
+  transition:
+    background 0.12s,
+    color 0.12s,
+    box-shadow 0.12s;
+}
+
+.online-segment input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.online-segment.is-on {
+  color: var(--fg);
+  background: color-mix(in oklch, var(--accent) 18%, var(--surface-2));
+  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--accent) 55%, transparent);
+}
+
+.online-segment:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .online-modal-actions {
   display: flex;
   justify-content: flex-end;
@@ -873,6 +939,9 @@
   .online-brand-copy span,
   .online-ghost-btn {
     display: none;
+  }
+  .online-share-btn {
+    display: grid;
   }
   .online-arena {
     border-radius: 17px;

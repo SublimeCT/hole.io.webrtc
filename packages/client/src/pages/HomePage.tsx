@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactElement } from "react";
 import { useNavigate } from "react-router-dom";
 import { PLAYER_NAME_PATTERN } from "@hole-io/shared/protocol";
+import { getHoleProgress } from "@hole-io/shared/simulation";
 
 import {
   loadPreferences,
@@ -16,6 +17,7 @@ import {
   translate,
   type Language,
 } from "../app/i18n";
+import { loadPlayerStats } from "../app/playerStats";
 import { VoidWordmark } from "../ui/VoidWordmark";
 
 const RING_COLORS = [
@@ -64,6 +66,8 @@ async function copyGameLink(url: string): Promise<void> {
 export function HomePage() {
   const navigate = useNavigate();
   const [preferences, setPreferences] = useState<GamePreferences>(() => loadPreferences());
+  const [bestScore] = useState(() => loadPlayerStats().bestScore);
+  const bestHoleProgress = getHoleProgress(bestScore);
   const [draftName, setDraftName] = useState(preferences.playerName);
   const [draftColor, setDraftColor] = useState(preferences.playerRingColor);
   const [draftLanguage, setDraftLanguage] = useState<Language>(preferences.language);
@@ -420,7 +424,8 @@ export function HomePage() {
           <div className="home-lc-row">
             <span className="home-lc-label">{translate(preferences.language, "bestSize")}</span>
             <span className="home-lc-value home-lc-value-gold">
-              Lv.9<small>· 12.6m</small>
+              Lv.{bestHoleProgress.level + 1}
+              <small>· {bestHoleProgress.radius.toFixed(1)}m</small>
             </span>
           </div>
           <div className="home-lc-spark" aria-hidden="true">
