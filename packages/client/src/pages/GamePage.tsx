@@ -114,6 +114,13 @@ export default function GamePage() {
   const termination = useStore(multiplayerStore, (state) => state.termination);
   const isOnline = session !== null && matchId !== null && roomStatus === "playing";
 
+  // 锁定本局模式：GamePage 挂载时确定联机/单机。对局结束 matchId→null 会让 isOnline 变 false，
+  // 但本局模式不能变——否则下面的 game init effect 会重建 Game、dispose 掉联机 driver，
+  // 导致 matchId 兜底拿不到 buildCurrentMatchResult() 而跳过结算页直接回房间。
+  const modeRef = useRef<"online" | "offline">(
+    session !== null && matchId !== null && roomStatus === "playing" ? "online" : "offline",
+  );
+
   // 对局结束幂等守卫：本地 Game.onMatchEnd 与 matchId 监听安全网都可能触发，只取首触发。
   const matchEndedRef = useRef(false);
   const driverRef = useRef<OnlineGameDriver | null>(null);
@@ -207,7 +214,7 @@ export default function GamePage() {
       window.setTimeout(() => setPoopRain([]), 3_000);
     };
 
-    if (isOnline) {
+    if (modeRef.current === "online") {
       if (session === null) return;
       const driver = new OnlineGameDriver({
         session,
@@ -247,7 +254,7 @@ export default function GamePage() {
     }
 
     return () => activeCleanup?.();
-  }, [isOnline, session, language, navigate, handleMatchEnd]);
+  }, [session, language, navigate, handleMatchEnd]);
 
   return (
     <main className="app-shell">

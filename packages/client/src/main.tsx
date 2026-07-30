@@ -17,3 +17,9 @@ if (!root) {
 applyDocumentLanguage(loadPreferences().language);
 
 createRoot(root).render(<App />);
+
+if (import.meta.env.PROD) {
+  import("@microsoft/clarity").then((Clarity) => {
+    Clarity.default.init("xubywmb6k4");
+  });
+}

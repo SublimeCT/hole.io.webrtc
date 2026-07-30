@@ -18,6 +18,7 @@ import {
   type Language,
 } from "../app/i18n";
 import { loadPlayerStats } from "../app/playerStats";
+import { useMultiplayer } from "../net/MultiplayerProvider";
 import { VoidWordmark } from "../ui/VoidWordmark";
 
 const RING_COLORS = [
@@ -65,6 +66,7 @@ async function copyGameLink(url: string): Promise<void> {
 
 export function HomePage() {
   const navigate = useNavigate();
+  const { disposeSession } = useMultiplayer();
   const [preferences, setPreferences] = useState<GamePreferences>(() => loadPreferences());
   const [bestScore] = useState(() => loadPlayerStats().bestScore);
   const bestHoleProgress = getHoleProgress(bestScore);
@@ -282,6 +284,9 @@ export function HomePage() {
         await shareGame();
         return;
       case "online":
+        // 主页联机 = 新会话：清掉可能残留的旧房间 session（玩家未点离开、经浏览器后退回主页等），
+        // 避免再次进入联机时复用旧房间。
+        disposeSession();
         navigate({ pathname: "/online", search: "" });
         return;
     }
