@@ -1,4 +1,4 @@
-import { recordBestScore } from "./playerStats";
+import { recordMatchStats } from "./playerStats";
 
 export interface MatchResultEntry {
   id: string;
@@ -25,7 +25,7 @@ export interface MatchResult {
 const MATCH_RESULT_KEY = "hole-city-last-match";
 
 export function saveMatchResult(result: MatchResult): void {
-  recordBestScore(result.playerScore);
+  recordMatchStats({ score: result.playerScore, swallowCount: result.swallowCount });
   try {
     sessionStorage.setItem(MATCH_RESULT_KEY, JSON.stringify(result));
   } catch {

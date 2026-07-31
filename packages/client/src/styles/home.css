@@ -531,7 +531,7 @@
   display: flex;
 }
 
-/* ---- 深渊实况面板 ---- */
+/* ---- 战绩面板 ---- */
 .home-livecard {
   position: absolute;
   right: clamp(18px, 5vw, 64px);
@@ -575,31 +575,15 @@
   letter-spacing: 0.06em;
 }
 
-.home-lc-live {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+.home-lc-badge {
   font-size: 11px;
-  letter-spacing: 0.14em;
-  color: var(--danger);
+  letter-spacing: 0.04em;
+  color: var(--gold);
   font-weight: 700;
-  text-transform: uppercase;
-}
-
-.home-lc-live::before {
-  content: "";
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--danger);
-  box-shadow: 0 0 8px var(--danger);
-  animation: home-blink 1.4s ease-in-out infinite;
-}
-
-@keyframes home-blink {
-  50% {
-    opacity: 0.3;
-  }
+  padding: 3px 9px;
+  border: 1px solid color-mix(in oklch, var(--gold) 45%, transparent);
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--gold) 14%, transparent);
 }
 
 .home-lc-row {

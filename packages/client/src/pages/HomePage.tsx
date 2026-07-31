@@ -68,8 +68,19 @@ export function HomePage() {
   const navigate = useNavigate();
   const { disposeSession } = useMultiplayer();
   const [preferences, setPreferences] = useState<GamePreferences>(() => loadPreferences());
-  const [bestScore] = useState(() => loadPlayerStats().bestScore);
-  const bestHoleProgress = getHoleProgress(bestScore);
+  const [stats] = useState(() => loadPlayerStats());
+  const bestHoleProgress = getHoleProgress(stats.bestScore);
+  // 根据历史最高分（成长等级阈值）授予头衔，作为战绩卡右上角徽章。
+  const profileTitleKey =
+    stats.bestScore >= 1800
+      ? "titleAbyss"
+      : stats.bestScore >= 720
+        ? "titleCity"
+        : stats.bestScore >= 234
+          ? "titleBlock"
+          : stats.bestScore >= 36
+            ? "titleStreet"
+            : "titleNew";
   const [draftName, setDraftName] = useState(preferences.playerName);
   const [draftColor, setDraftColor] = useState(preferences.playerRingColor);
   const [draftLanguage, setDraftLanguage] = useState<Language>(preferences.language);
@@ -79,8 +90,6 @@ export function HomePage() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [focusedMenu, setFocusedMenu] = useState(0);
   const [toastMessage, setToastMessage] = useState("");
-  const [eatCount, setEatCount] = useState(2847193);
-  const [onlineCount, setOnlineCount] = useState(1204);
 
   const menuButtons = useRef<Array<HTMLButtonElement | null>>([]);
   const nameInput = useRef<HTMLInputElement>(null);
@@ -211,20 +220,6 @@ export function HomePage() {
     });
     return () => {
       created.forEach((node) => node.remove());
-    };
-  }, []);
-
-  // 深渊实况动态计数。
-  useEffect(() => {
-    const eatInterval = window.setInterval(() => {
-      setEatCount((current) => current + Math.floor(Math.random() * 140 + 30));
-    }, 900);
-    const onlineInterval = window.setInterval(() => {
-      setOnlineCount((current) => Math.max(1180, current + (Math.floor(Math.random() * 7) - 3)));
-    }, 1500);
-    return () => {
-      window.clearInterval(eatInterval);
-      window.clearInterval(onlineInterval);
     };
   }, []);
 
@@ -413,18 +408,12 @@ export function HomePage() {
           </nav>
         </section>
 
-        <aside className="home-livecard" aria-label={translate(preferences.language, "live")}>
+        <aside className="home-livecard" aria-label={translate(preferences.language, "profile")}>
           <div className="home-lc-head">
-            <span className="home-lc-title">{translate(preferences.language, "live")}</span>
-            <span className="home-lc-live">LIVE</span>
-          </div>
-          <div className="home-lc-row">
-            <span className="home-lc-label">{translate(preferences.language, "buildings")}</span>
-            <span className="home-lc-value home-lc-value-accent">{eatCount.toLocaleString()}</span>
-          </div>
-          <div className="home-lc-row">
-            <span className="home-lc-label">{translate(preferences.language, "onlineHoles")}</span>
-            <span className="home-lc-value">{onlineCount.toLocaleString()}</span>
+            <span className="home-lc-title">{translate(preferences.language, "profile")}</span>
+            <span className="home-lc-badge">
+              {translate(preferences.language, profileTitleKey)}
+            </span>
           </div>
           <div className="home-lc-row">
             <span className="home-lc-label">{translate(preferences.language, "bestSize")}</span>
@@ -432,6 +421,18 @@ export function HomePage() {
               Lv.{bestHoleProgress.level + 1}
               <small>· {bestHoleProgress.radius.toFixed(1)}m</small>
             </span>
+          </div>
+          <div className="home-lc-row">
+            <span className="home-lc-label">
+              {translate(preferences.language, "lifetimeSwallowed")}
+            </span>
+            <span className="home-lc-value home-lc-value-accent">
+              {stats.totalSwallowed.toLocaleString()}
+            </span>
+          </div>
+          <div className="home-lc-row">
+            <span className="home-lc-label">{translate(preferences.language, "gamesPlayed")}</span>
+            <span className="home-lc-value">{stats.gamesPlayed.toLocaleString()}</span>
           </div>
           <div className="home-lc-spark" aria-hidden="true">
             {Array.from({ length: 9 }, (_, index) => (
