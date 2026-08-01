@@ -13,6 +13,7 @@ import {
   CITY_CHARACTER_COUNT,
   CITY_MOVING_CHARACTER_COUNT,
   CITY_SMALL_OBJECT_COUNTS,
+  CITY_TRAFFIC_LIGHT_COUNT,
   CITY_VEHICLE_COUNT,
   GAME_DURATION_SECONDS,
   INITIAL_HOLE_RADIUS,
@@ -31,12 +32,16 @@ import {
   SIDEWALK_WIDTH,
   SPEED_BOOST_COOLDOWN_SECONDS,
   SPEED_BOOST_DURATION_SECONDS,
+  TRAFFIC_CYCLE_SECONDS,
+  TRAFFIC_LIGHT_PREFAB_ID,
+  TRAFFIC_NS_GREEN_SECONDS,
   VEHICLE_SPEED,
 } from "./constants";
 import { createSimulationPhysicsRuntime, type SimulationPhysicsRuntime } from "./physics";
 import { advanceRoutedObjects, stepSimulation as stepSimulationWithRuntime } from "./simulation";
 import { createSimulationRuntime, type SimulationRuntime } from "./runtime";
 import { SpatialHash } from "./spatialHash";
+import { greenAxisAt, greenTimeAccumulated, routedPositionAt } from "./trafficLights";
 import {
   BUILDING_PREFAB_IDS,
   getPrefabDefinition,
@@ -229,7 +234,7 @@ describe("SimulationRuntime", () => {
   });
 });
 
-describe("advanceRoutedObjects (guest-side deterministic vehicle advance)", () => {
+describe("traffic-light deterministic routes", () => {
   it("is pure: moves vehicles but leaves every authority field untouched", () => {
     const initial = createInitialSimulation();
     const runtime = createSimulationRuntime(initial);
@@ -243,38 +248,53 @@ describe("advanceRoutedObjects (guest-side deterministic vehicle advance)", () =
     expect(result.state.objects).not.toBe(initial.objects);
   });
 
-  it("produces byte-identical vehicle positions to the host authoritative step", async () => {
-    // holes: [] 保证 host 侧不会吞噬任何车辆，host 的 stepSimulation 对车辆的唯一作用就是
-    // 与 advanceRoutedObjects 同一个 moveRoutedObjects——两端必须逐帧一致。
+  it("matches host vehicle positions to routedPositionAt at the same elapsed", async () => {
     const base = { ...createInitialSimulation(), holes: [] };
     const physics = await createSimulationPhysicsRuntime();
     try {
       const hostRuntime = createSimulationRuntime(base);
-      const guestRuntime = createSimulationRuntime(base);
       let hostState = base;
-      let guestState = base;
       for (let step = 0; step < 300; step += 1) {
         hostState = stepSimulationWithRuntime(hostState, [], 1 / 60, physics, hostRuntime).state;
-        guestState = advanceRoutedObjects(guestState, 1 / 60, guestRuntime).state;
       }
-      const hostVehicles = new Map<string, { x: number; y: number }>();
       for (const object of hostState.objects) {
-        if (object.motion?.kind === "vehicle") {
-          hostVehicles.set(object.id, { x: object.position.x, y: object.position.y });
-        }
-      }
-      let compared = 0;
-      for (const object of guestState.objects) {
         if (object.motion?.kind !== "vehicle") continue;
-        const host = hostVehicles.get(object.id);
-        expect(host).toBeDefined();
-        expect(object.position.x).toBeCloseTo(host!.x, 8);
-        expect(object.position.y).toBeCloseTo(host!.y, 8);
-        compared += 1;
+        expect(object.position).toEqual(routedPositionAt(object, hostState.elapsed));
       }
-      expect(compared).toBe(CITY_VEHICLE_COUNT);
     } finally {
       physics.dispose();
+    }
+  });
+
+  it("accumulates green time without yellow or local step state", () => {
+    expect(greenAxisAt(0)).toBe("y");
+    expect(greenTimeAccumulated("y", TRAFFIC_NS_GREEN_SECONDS)).toBeCloseTo(
+      TRAFFIC_NS_GREEN_SECONDS,
+    );
+    expect(greenTimeAccumulated("x", TRAFFIC_NS_GREEN_SECONDS)).toBe(0);
+    expect(greenAxisAt(TRAFFIC_NS_GREEN_SECONDS)).toBe("x");
+    expect(greenTimeAccumulated("y", TRAFFIC_CYCLE_SECONDS)).toBeCloseTo(TRAFFIC_NS_GREEN_SECONDS);
+    expect(greenTimeAccumulated("x", TRAFFIC_CYCLE_SECONDS)).toBeCloseTo(
+      TRAFFIC_CYCLE_SECONDS - TRAFFIC_NS_GREEN_SECONDS,
+    );
+  });
+
+  it("never places horizontal and vertical traffic in intersections simultaneously", () => {
+    const vehicles = createInitialSimulation().objects.filter(
+      (object) => object.motion?.kind === "vehicle",
+    );
+    const vertical = vehicles.filter((object) => object.motion?.axis === "y");
+    const horizontal = vehicles.filter((object) => object.motion?.axis === "x");
+    for (let elapsed = 0; elapsed <= GAME_DURATION_SECONDS; elapsed += 0.05) {
+      const verticalInIntersection = vertical.some((object) => {
+        const position = routedPositionAt(object, elapsed);
+        return ROAD_Y_CENTERS.some((center) => Math.abs(position.y - center) <= object.size.y / 2);
+      });
+      const horizontalInIntersection = horizontal.some((object) => {
+        const position = routedPositionAt(object, elapsed);
+        return ROAD_X_CENTERS.some((center) => Math.abs(position.x - center) <= object.size.y / 2);
+      });
+      expect(verticalInIntersection && horizontalInIntersection).toBe(false);
     }
   });
 });
@@ -712,7 +732,7 @@ describe("world defaults", () => {
   });
 
   it("registers every shipped GLB model and identifies the tallest building", () => {
-    const assetRoot = join(process.cwd(), "assets", "kits");
+    const assetRoot = join(import.meta.dirname, "../../../assets/kits");
     const shippedModels = listGlbAssets(assetRoot)
       .map((path) => relative(assetRoot, path).replaceAll("\\", "/"))
       .toSorted();
@@ -869,52 +889,6 @@ describe("world defaults", () => {
     expect(movedPedestrian.motion).toBeNull();
   });
 
-  it("keeps queued vehicles separated by their physical lengths", () => {
-    const initial = createInitialSimulation();
-    const source = initial.objects.find((object) => object.motion?.speed === VEHICLE_SPEED);
-    if (!source) {
-      throw new Error("Vehicle is required");
-    }
-    const motion = {
-      kind: "vehicle" as const,
-      laneId: "test-lane",
-      axis: "x" as const,
-      direction: 1 as const,
-      speed: VEHICLE_SPEED,
-      lateralCoordinate: 0,
-      headingYaw: Math.PI / 2,
-      minimum: -168,
-      maximum: 168,
-    };
-    const leader: WorldObjectState = {
-      ...source,
-      id: "leader",
-      position: { x: 0, y: 0 },
-      motion,
-      routeMotion: motion,
-    };
-    const follower: WorldObjectState = {
-      ...source,
-      id: "follower",
-      position: { x: -0.1, y: 0 },
-      motion,
-      routeMotion: motion,
-    };
-    const result = stepSimulation(
-      { ...initial, elapsed: 0, holes: [], objects: [leader, follower] },
-      [],
-      0.1,
-    );
-    const nextLeader = result.state.objects[0];
-    const nextFollower = result.state.objects[1];
-    if (!nextLeader || !nextFollower) {
-      throw new Error("Queued vehicles are required");
-    }
-    const minimumGap = nextLeader.size.y / 2 + nextFollower.size.y / 2 + 1.2;
-
-    expect(nextLeader.position.x - nextFollower.position.x).toBeGreaterThanOrEqual(minimumGap);
-  });
-
   it("builds a dense non-overlapping city with correct street-side routes", () => {
     const initial = createInitialSimulation();
 
@@ -992,6 +966,7 @@ describe("world defaults", () => {
         !object.prefabId.startsWith("building-") &&
         !object.prefabId.startsWith("commercial-") &&
         !object.prefabId.startsWith("character-") &&
+        object.prefabId !== TRAFFIC_LIGHT_PREFAB_ID &&
         object.motion?.kind !== "vehicle",
     );
     expect(smallObjects).toHaveLength(
@@ -1012,6 +987,9 @@ describe("world defaults", () => {
       expect(object.size).toEqual(prefab.size);
       expect(object.height).toBe(prefab.height);
     });
+    expect(
+      initial.objects.filter((object) => object.prefabId === TRAFFIC_LIGHT_PREFAB_ID),
+    ).toHaveLength(CITY_TRAFFIC_LIGHT_COUNT);
     const roadAndSidewalkHalfWidth = ROAD_WIDTH / 2 + SIDEWALK_WIDTH;
     for (let blockX = 0; blockX < CITY_BLOCK_COLUMNS; blockX += 1) {
       for (let blockY = 0; blockY < CITY_BLOCK_ROWS; blockY += 1) {
@@ -1338,6 +1316,26 @@ describe("world defaults", () => {
     expect(result.state.objects[0]?.sizeMultiplier).toBe(vehicle.sizeMultiplier);
     expect(result.state.holes[0]?.score).toBe(player.score + vehicle.value);
     expect(result.events.filter((event) => event.type === "consumed")).toHaveLength(1);
+  });
+
+  it("activates and consumes a traffic light through the authoritative physics path", () => {
+    const initial = createInitialSimulation();
+    const trafficLight = initial.objects.find(
+      (object) => object.prefabId === TRAFFIC_LIGHT_PREFAB_ID,
+    );
+    const player = initial.holes[0];
+    if (!trafficLight || !player) throw new Error("Traffic light and player are required");
+    const state = {
+      ...initial,
+      holes: [{ ...player, position: { ...trafficLight.position } }],
+      objects: [trafficLight],
+    };
+
+    const activated = stepSimulation(state, [], 1 / 60).state;
+    expect(activated.objects[0]?.status).toBe("active");
+    const consumed = advance(activated, 240);
+    expect(consumed.objects[0]?.status).toBe("consumed");
+    expect(consumed.holes[0]?.score).toBe(trafficLight.value);
   });
 
   it("directly consumes every vehicle prefab when a hole fully covers it", () => {

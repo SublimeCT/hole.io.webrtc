@@ -71,6 +71,7 @@ export interface RouteMotion {
   speed: number;
   lateralCoordinate: number;
   headingYaw: number;
+  initialCoordinate: number;
   minimum: number;
   maximum: number;
 }

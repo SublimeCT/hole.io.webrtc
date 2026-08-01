@@ -26,6 +26,7 @@ import { stepActivePhysics, type SimulationPhysicsRuntime } from "./physics";
 import { isInsideNormalizedFootprint } from "./footprint";
 import { getHoleProgress } from "./progression";
 import { createSimulationRuntime, type SimulationRuntime } from "./runtime";
+import { routedPositionAt } from "./trafficLights";
 import type {
   AbilityId,
   FootprintStrike,
@@ -704,158 +705,18 @@ function collectPowerUps(
   };
 }
 
-function wrapRoutePosition(value: number, minimum: number, maximum: number): number {
-  const span = maximum - minimum;
-  if (span <= 0) {
-    return minimum;
-  }
-  if (value > maximum) {
-    return minimum + ((value - minimum) % span);
-  }
-  if (value < minimum) {
-    return maximum - ((maximum - value) % span);
-  }
-  return value;
-}
-
-function moveRoutedObject(object: WorldObjectState, deltaSeconds: number): WorldObjectState {
+function moveRoutedObject(object: WorldObjectState, elapsed: number): WorldObjectState {
   if (object.status !== "static" || !object.motion) {
     return object;
   }
-  const motion = object.motion;
-  const position = { ...object.position };
-  if (motion.axis === "x") {
-    position.y = motion.lateralCoordinate;
-  } else {
-    position.x = motion.lateralCoordinate;
-  }
-  const current = position[motion.axis];
-  position[motion.axis] = wrapRoutePosition(
-    current + motion.direction * motion.speed * deltaSeconds,
-    motion.minimum,
-    motion.maximum,
-  );
-  return { ...object, position };
-}
-
-function vehicleFootprintsOverlap(left: WorldObjectState, right: WorldObjectState): boolean {
-  const leftMotion = left.motion;
-  const rightMotion = right.motion;
-  if (!leftMotion || !rightMotion) {
-    return false;
-  }
-  const leftHalfX = leftMotion.axis === "x" ? left.size.y / 2 : left.size.x / 2;
-  const leftHalfY = leftMotion.axis === "y" ? left.size.y / 2 : left.size.x / 2;
-  const rightHalfX = rightMotion.axis === "x" ? right.size.y / 2 : right.size.x / 2;
-  const rightHalfY = rightMotion.axis === "y" ? right.size.y / 2 : right.size.x / 2;
-  return (
-    Math.abs(left.position.x - right.position.x) < leftHalfX + rightHalfX &&
-    Math.abs(left.position.y - right.position.y) < leftHalfY + rightHalfY
-  );
-}
-
-function enforceVehicleSpacing(
-  objects: WorldObjectState[],
-  runtime: SimulationRuntime,
-  changedObjectIds: Set<string>,
-): void {
-  const groups = new Map<string, { index: number; object: WorldObjectState }[]>();
-  const vehicleIndices: number[] = [];
-  for (const objectId of runtime.movingVehicleObjectIds) {
-    const index = runtime.objectIndexById.get(objectId);
-    const object = index === undefined ? undefined : objects[index];
-    if (index === undefined || object === undefined) {
-      continue;
-    }
-    const motion = object.motion;
-    if (object.status !== "static" || !motion || motion.kind !== "vehicle") {
-      continue;
-    }
-    vehicleIndices.push(index);
-    const key = motion.laneId;
-    const group = groups.get(key) ?? [];
-    group.push({ index, object });
-    groups.set(key, group);
-  }
-
-  for (const group of groups.values()) {
-    group.sort((left, right) => {
-      const leftMotion = left.object.motion;
-      const rightMotion = right.object.motion;
-      if (!leftMotion || !rightMotion) {
-        return 0;
-      }
-      return (
-        (right.object.position[rightMotion.axis] - left.object.position[leftMotion.axis]) *
-        leftMotion.direction
-      );
-    });
-    for (let index = 1; index < group.length; index += 1) {
-      const leaderEntry = group[index - 1];
-      const followerEntry = group[index];
-      if (!leaderEntry || !followerEntry || !followerEntry.object.motion) {
-        continue;
-      }
-      const leader = objects[leaderEntry.index] ?? leaderEntry.object;
-      const follower = objects[followerEntry.index] ?? followerEntry.object;
-      const motion = followerEntry.object.motion;
-      const leaderPosition = leader.position[motion.axis];
-      const followerPosition = follower.position[motion.axis];
-      const minimumGap = leader.size.y / 2 + follower.size.y / 2 + 1.2;
-      if ((leaderPosition - followerPosition) * motion.direction < minimumGap) {
-        const position = { ...follower.position };
-        position[motion.axis] = leaderPosition - motion.direction * minimumGap;
-        objects[followerEntry.index] = { ...follower, position };
-        changedObjectIds.add(follower.id);
-      }
-    }
-  }
-  for (let pass = 0; pass < 3; pass += 1) {
-    const intersectionCells = new Map<string, number[]>();
-    for (const leftIndex of vehicleIndices) {
-      const left = objects[leftIndex];
-      if (!left?.motion || left.motion.kind !== "vehicle" || left.status !== "static") {
-        continue;
-      }
-      const cellX = Math.floor(left.position.x / 10);
-      const cellY = Math.floor(left.position.y / 10);
-      for (let offsetY = -1; offsetY <= 1; offsetY += 1) {
-        for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
-          const nearbyIndices =
-            intersectionCells.get(`${cellX + offsetX}:${cellY + offsetY}`) ?? [];
-          for (const rightIndex of nearbyIndices) {
-            const right = objects[rightIndex];
-            if (!right || !vehicleFootprintsOverlap(left, right)) {
-              continue;
-            }
-            const yieldingIndex = left.id > right.id ? leftIndex : rightIndex;
-            const yielding = objects[yieldingIndex];
-            if (!yielding?.motion) {
-              continue;
-            }
-            const position = { ...yielding.position };
-            const yieldingHalfLength =
-              yielding.motion.axis === "x" ? yielding.size.y / 2 : yielding.size.x / 2;
-            position[yielding.motion.axis] -=
-              yielding.motion.direction * (yieldingHalfLength + 1.4);
-            objects[yieldingIndex] = { ...yielding, position };
-            changedObjectIds.add(yielding.id);
-          }
-        }
-      }
-      const key = `${cellX}:${cellY}`;
-      const indices = intersectionCells.get(key) ?? [];
-      indices.push(leftIndex);
-      intersectionCells.set(key, indices);
-    }
-  }
+  return { ...object, position: routedPositionAt(object, elapsed) };
 }
 
 function moveRoutedObjects(
   objects: readonly WorldObjectState[],
   runtime: SimulationRuntime,
   releasedObjectIds: ReadonlySet<string>,
-  deltaSeconds: number,
+  elapsed: number,
 ): { objects: readonly WorldObjectState[]; changedObjectIds: ReadonlySet<string> } {
   const nextObjects = [...objects];
   const changedObjectIds = new Set<string>();
@@ -874,36 +735,19 @@ function moveRoutedObjects(
     if (index === undefined || object === undefined) {
       continue;
     }
-    const moved = moveRoutedObject(object, deltaSeconds);
+    const moved = moveRoutedObject(object, elapsed);
     if (moved !== object) {
       nextObjects[index] = moved;
       changedObjectIds.add(objectId);
     }
   }
-  enforceVehicleSpacing(nextObjects, runtime, changedObjectIds);
   return { objects: nextObjects, changedObjectIds };
 }
 
 /** advanceRoutedObjects 的空 releasedObjectIds：联机无 bot，车辆不被 bot 释放。 */
 const EMPTY_RELEASED_OBJECT_IDS: ReadonlySet<string> = new Set();
 
-/**
- * guest 端确定性推进路由车辆（仅车辆沿路线移动 + 车距避让）。
- *
- * 这是 AGENTS.md §0.1「guest 永不本地模拟」的唯一例外：路由车辆运动是 host/guest
- * 共用的同一纯函数 `moveRoutedObjects` 的闭式等价物，不涉及任何玩法权威性
- * （位置/分数/吞噬/死亡/道具仍全由 host 计算），故让 guest 本地复算以使全员车辆运动一致。
- *
- * 确定性前提（任一被破坏都会让 host/guest 车辆错位，修改时务必保持）：
- * 1. host 与 guest 用同一固定步长常量 FIXED_STEP_SECONDS = 1/60（Game.ts 同文件共享）。
- * 2. enforceVehicleSpacing 依赖 Array.sort 稳定（ES2019 起强制稳定），不可改成非稳定排序。
- * 3. runtime.movingRouteObjectIds 的迭代顺序由相同 initialState.objects 的数组顺序决定，两端一致。
- * 4. 联机不生成 bot → releasedObjectIds 两端皆空 → 逐 tick 输入完全一致。
- *
- * 已知可接受偏差：match-start 信号时延造成全网车辆一个常量相位偏移（4.5m/s × ~RTT/2，亚米级），
- * 仅纯视觉、不影响玩法（车辆吞噬仍由 host 权威、靠 consumed override 收敛）。不要用 host 时间
- * 插值去「修正」这个偏移——它不是漂移。
- */
+/** Recomputes routed objects at state.elapsed + delta without changing authority fields. */
 export function advanceRoutedObjects(
   state: SimulationState,
   deltaSeconds: number,
@@ -914,7 +758,12 @@ export function advanceRoutedObjects(
   }
   const safeDelta = Math.min(deltaSeconds, 0.1);
   runtime.prepare(state);
-  const routed = moveRoutedObjects(state.objects, runtime, EMPTY_RELEASED_OBJECT_IDS, safeDelta);
+  const routed = moveRoutedObjects(
+    state.objects,
+    runtime,
+    EMPTY_RELEASED_OBJECT_IDS,
+    state.elapsed + safeDelta,
+  );
   runtime.commitObjects(routed.objects, routed.changedObjectIds);
   return {
     state: { ...state, objects: routed.objects },
@@ -1065,7 +914,12 @@ export function stepSimulation(
   const holeResolution = resolveHoleConsumption(bombResolution.holes, safeDelta, rngState);
   const competitiveHoles = holeResolution.holes;
   rngState = holeResolution.rngState;
-  const routed = moveRoutedObjects(state.objects, runtime, releasedObjectIds, safeDelta);
+  const routed = moveRoutedObjects(
+    state.objects,
+    runtime,
+    releasedObjectIds,
+    state.elapsed + safeDelta,
+  );
   runtime.commitObjects(routed.objects, routed.changedObjectIds);
   const vehicleResolution = consumeFullyCoveredVehicles(routed.objects, competitiveHoles, runtime);
   runtime.commitObjects(vehicleResolution.objects, vehicleResolution.changedObjectIds);

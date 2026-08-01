@@ -55,6 +55,15 @@ export type ObjectStateOverride =
   | { id: string; state: "active"; object: ActiveObjectSnapshot }
   | {
       id: string;
+      state: "resized";
+      sizeMultiplier: number;
+      size: Vector2;
+      height: number;
+      fitDiameter: number;
+      centerY: number;
+    }
+  | {
+      id: string;
       state: "settled";
       position: Vector2;
       centerY: number;

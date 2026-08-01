@@ -6,10 +6,12 @@ export const MAP_HALF_HEIGHT = MAP_HEIGHT / 2;
 export const INITIAL_HOLE_RADIUS = 1.15;
 export const GAME_DURATION_SECONDS = 180;
 export const BOT_COUNT = 2;
-export const SCENE_OBJECT_COUNT = 695;
+export const SCENE_OBJECT_COUNT = 715;
 export const CITY_BUILDING_COUNT = 157;
 export const CITY_VEHICLE_COUNT = 44;
 export const CITY_CHARACTER_COUNT = 155;
+export const CITY_TRAFFIC_LIGHT_COUNT = 20;
+export const TRAFFIC_LIGHT_PREFAB_ID = "traffic-light";
 export const CITY_MOVING_CHARACTER_COUNT = 0;
 export const CITY_SMALL_OBJECT_COUNTS = {
   4: 150,
@@ -22,6 +24,9 @@ export const MOVE_SPEED_PER_LEVEL = 0.45;
 export const BOT_SPEED_MULTIPLIER = 0.56;
 export const BOT_DETECTION_RADIUS = 88;
 export const VEHICLE_SPEED = 4.5;
+export const TRAFFIC_NS_GREEN_SECONDS = 51 / VEHICLE_SPEED;
+export const TRAFFIC_EW_GREEN_SECONDS = 51 / VEHICLE_SPEED;
+export const TRAFFIC_CYCLE_SECONDS = TRAFFIC_NS_GREEN_SECONDS + TRAFFIC_EW_GREEN_SECONDS;
 export const PEDESTRIAN_SPEED = 1.15;
 
 export const SPEED_BOOST_DURATION_SECONDS = 5;

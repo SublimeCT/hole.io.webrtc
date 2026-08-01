@@ -5,6 +5,7 @@ export * from "./progression";
 export { createSimulationPhysicsRuntime } from "./physics";
 export type { SimulationPhysicsRuntime } from "./physics";
 export { stepSimulation, advanceRoutedObjects } from "./simulation";
+export { greenAxisAt, greenTimeAccumulated, routedPositionAt } from "./trafficLights";
 export { SpatialHash } from "./spatialHash";
 export { createSimulationRuntime } from "./runtime";
 export type { SimulationRuntime } from "./runtime";

@@ -1,6 +1,7 @@
 import {
   FOOTPRINT_MARK_SECONDS,
   PREFAB_DEFINITIONS,
+  TRAFFIC_LIGHT_PREFAB_ID,
   type HoleState,
   type PrefabDefinition,
   type WorldObjectState,
@@ -95,9 +96,10 @@ export class CityObjectRenderer {
     onProgress: (loaded: number, total: number) => void,
   ): Promise<void> {
     this.#objectsById.clear();
-    objects.forEach((object) => this.#objectsById.set(object.id, object));
+    const renderedObjects = objects.filter((object) => object.prefabId !== TRAFFIC_LIGHT_PREFAB_ID);
+    renderedObjects.forEach((object) => this.#objectsById.set(object.id, object));
     const objectsByPrefab = new Map<string, WorldObjectState[]>();
-    for (const object of objects) {
+    for (const object of renderedObjects) {
       const prefabObjects = objectsByPrefab.get(object.prefabId) ?? [];
       prefabObjects.push(object);
       objectsByPrefab.set(object.prefabId, prefabObjects);
@@ -203,6 +205,7 @@ export class CityObjectRenderer {
     const touchedMeshes = new Set<THREE.InstancedMesh>();
     const objectIds = new Set<string>();
     changedObjects.forEach((object) => {
+      if (object.prefabId === TRAFFIC_LIGHT_PREFAB_ID) return;
       this.#objectsById.set(object.id, object);
       objectIds.add(object.id);
     });

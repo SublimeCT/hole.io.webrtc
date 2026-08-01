@@ -15,6 +15,7 @@ import {
   ROAD_WIDTH,
   SCENE_OBJECT_COUNT,
   SIDEWALK_WIDTH,
+  TRAFFIC_LIGHT_PREFAB_ID,
   VEHICLE_SPEED,
 } from "./constants";
 import { getPrefabDefinition, HIGHEST_BUILDING_PREFAB_ID } from "./prefabs";
@@ -284,6 +285,32 @@ function createObject(
   };
 }
 
+function createTrafficLightObject(index: number, position: Vector2): WorldObjectState {
+  const size = { x: 0.8, y: 0.8 };
+  const height = 3.8;
+  return {
+    id: `object-${index + 1}`,
+    prefabId: TRAFFIC_LIGHT_PREFAB_ID,
+    shape: "box",
+    position,
+    centerY: height / 2,
+    size,
+    height,
+    stackLayers: 1,
+    sizeMultiplier: 1,
+    fitDiameter: Math.hypot(size.x, size.y),
+    value: 12,
+    status: "static",
+    velocity: { x: 0, y: 0, z: 0 },
+    angularVelocity: { x: 0, y: 0, z: 0 },
+    rotation: rotationFromYaw(0),
+    activeTime: 0,
+    claimedBy: null,
+    motion: null,
+    routeMotion: null,
+  };
+}
+
 function route(
   kind: RouteMotion["kind"],
   laneId: string,
@@ -292,6 +319,7 @@ function route(
   speed: number,
   lateralCoordinate: number,
   headingYaw: number,
+  initialCoordinate: number,
   minimum?: number,
   maximum?: number,
 ): RouteMotion {
@@ -304,14 +332,10 @@ function route(
     speed,
     lateralCoordinate,
     headingYaw,
+    initialCoordinate,
     minimum: minimum ?? -routeLimit,
     maximum: maximum ?? routeLimit,
   };
-}
-
-function footprintRadius(prefabId: string, sizeMultiplier = 1): number {
-  const prefab = getPrefabDefinition(prefabId);
-  return (Math.hypot(prefab.size.x, prefab.size.y) * sizeMultiplier) / 2;
 }
 
 function footprintHalfExtents(
@@ -810,9 +834,7 @@ function buildCityObjects(): readonly WorldObjectState[] {
   let laneIndex = 0;
   for (const axis of ["y", "x"] as const) {
     const roadCenters = axis === "y" ? ROAD_X_CENTERS : ROAD_Y_CENTERS;
-    const vehicleSlots = (axis === "y" ? yIntervals : xIntervals).map(
-      (interval) => interval.center,
-    );
+    const vehicleSlots = axis === "y" ? [-76.5, -25.5, 25.5, 76.5] : [-51, 0, 51];
     roadCenters.forEach((roadCenter, roadIndex) => {
       for (const laneOffset of [-1.75, 1.75] as const) {
         const direction: -1 | 1 =
@@ -843,6 +865,7 @@ function buildCityObjects(): readonly WorldObjectState[] {
               VEHICLE_SPEED,
               lateralCoordinate,
               yaw,
+              slot,
             ),
           );
           vehicleIndex += 1;
@@ -898,6 +921,17 @@ function buildCityObjects(): readonly WorldObjectState[] {
     throw new Error(`Expected ${CITY_CHARACTER_COUNT} characters, received ${characterIndex}`);
   }
 
+  for (const roadX of ROAD_X_CENTERS) {
+    for (const roadY of ROAD_Y_CENTERS) {
+      objects.push(
+        createTrafficLightObject(objects.length, {
+          x: roadX + 3.9,
+          y: roadY + 3.9,
+        }),
+      );
+    }
+  }
+
   if (objects.length !== SCENE_OBJECT_COUNT) {
     throw new Error(`Expected ${SCENE_OBJECT_COUNT} city objects, received ${objects.length}`);
   }
@@ -944,7 +978,7 @@ function generateSpawnPositions(
   const spawnLimitY = MAP_HALF_HEIGHT - INITIAL_HOLE_RADIUS - 1;
   const blockedCells = new Map<string, BlockedFootprint[]>();
   for (const object of objects) {
-    const radius = footprintRadius(object.prefabId, object.sizeMultiplier);
+    const radius = Math.hypot(object.size.x, object.size.y) / 2;
     const footprint: BlockedFootprint = {
       id: object.id,
       position: object.position,

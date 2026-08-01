@@ -14,8 +14,8 @@ import {
   createInitialSimulation,
   createSimulationPhysicsRuntime,
   createSimulationRuntime,
-  advanceRoutedObjects,
   getHoleProgress,
+  routedPositionAt,
   stepSimulation,
   type AbilityId,
   type HoleState,
@@ -49,6 +49,7 @@ import { Feedback } from "./Feedback";
 import { HoleRenderer } from "./HoleRenderer";
 import { InputController } from "./InputController";
 import { PowerUpRenderer } from "./PowerUpRenderer";
+import { TrafficLightRenderer } from "./TrafficLightRenderer";
 
 const FIXED_STEP_SECONDS = 1 / 60;
 /** 单帧最多追赶的模拟步数上限。卡顿（GC/标签页切换/上下文丢失恢复）后只补有限步、丢弃其余积压，
@@ -148,6 +149,7 @@ export class Game {
   readonly #cityObjects: CityObjectRenderer;
   readonly #holeRenderer: HoleRenderer;
   readonly #powerUpRenderer: PowerUpRenderer;
+  readonly #trafficLights: TrafficLightRenderer;
   readonly #geometries = new Set<THREE.BufferGeometry>();
   readonly #materials = new Set<THREE.Material>();
   readonly #textures = new Set<THREE.Texture>();
@@ -166,12 +168,6 @@ export class Game {
   readonly #mode: GameMode;
   readonly #physicsRuntime: SimulationPhysicsRuntime | null;
   readonly #simulationRuntime: SimulationRuntime | null;
-  /**
-   * guest 专属的车辆推进 runtime（纯索引，无物理）。与 #simulationRuntime 分开：
-   * guest 的 #simulationRuntime 保持 null，使脏物体仍走 #guestDirtyObjectIds 渲染路径；
-   * 这个 runtime 仅用于 advanceRoutedObjects 的车辆索引/车距避让。
-   */
-  readonly #guestVehicleRuntime: SimulationRuntime | null;
   readonly #localPlayerId: string;
   readonly #playerNames: ReadonlyMap<string, string>;
   readonly #playerColors: ReadonlyMap<string, THREE.ColorRepresentation>;
@@ -188,6 +184,8 @@ export class Game {
   #baseWorldRevision = 0;
   #snapshotAccumulator = 0;
   readonly #emittedConsumed = new Set<string>();
+  readonly #emittedResized = new Set<string>();
+  readonly #initialObjects: readonly WorldObjectState[];
   readonly #remoteInputs = new Map<string, RemoteInput>();
   readonly #lastProcessedInputByPeer = new Map<string, number>();
   // guest 输入上报状态
@@ -205,6 +203,11 @@ export class Game {
   #fullObjectSyncPending = true;
   readonly #guestDirtyObjectIds = new Set<string>();
   readonly #objectIndexById = new Map<string, number>();
+  readonly #routedVehicleIndices: readonly number[];
+  #guestElapsedFrom = 0;
+  #guestElapsedTo = 0;
+  #guestElapsedStartedAt = 0;
+  #guestElapsedDuration = 0;
   /** 当前领先者 hole id（12.5Hz HUD 内更新），渲染帧直接读，避免每帧重排 holes。 */
   #leaderId: string | undefined;
   #resizePending = false;
@@ -225,7 +228,6 @@ export class Game {
     config: GameConfig,
     physicsRuntime: SimulationPhysicsRuntime | null,
     simulationRuntime: SimulationRuntime | null,
-    guestVehicleRuntime: SimulationRuntime | null,
   ) {
     const { canvas, ui, preferences } = config;
     this.#canvas = canvas;
@@ -235,12 +237,15 @@ export class Game {
     this.#onMatchEnd = config.onMatchEnd;
     this.#onPoopHit = config.onPoopHit;
     this.#state = config.initialState;
+    this.#initialObjects = config.initialState.objects;
     this.#mode = config.mode;
     this.#physicsRuntime = physicsRuntime;
     this.#simulationRuntime = simulationRuntime;
-    this.#guestVehicleRuntime = guestVehicleRuntime;
     config.initialState.objects.forEach((object, index) =>
       this.#objectIndexById.set(object.id, index),
+    );
+    this.#routedVehicleIndices = config.initialState.objects.flatMap((object, index) =>
+      object.routeMotion?.kind === "vehicle" ? [index] : [],
     );
     this.#localPlayerId = config.localPlayerId;
     this.#playerNames = config.playerNames;
@@ -267,6 +272,7 @@ export class Game {
       localPlayerId: config.localPlayerId,
     });
     this.#powerUpRenderer = new PowerUpRenderer(this.#scene, ui.powerUpLayer);
+    this.#trafficLights = new TrafficLightRenderer(this.#scene, config.initialState.objects);
     this.#buildScene();
     this.#holeRenderer.build(config.initialState.holes);
     this.#applyResize();
@@ -322,12 +328,9 @@ export class Game {
     const physicsRuntime = config.mode === "guest" ? null : await createSimulationPhysicsRuntime();
     const simulationRuntime =
       config.mode === "guest" ? null : createSimulationRuntime(config.initialState);
-    // guest 用纯索引 runtime 本地推进路由车辆（确定性环境运动，见 advanceRoutedObjects）。
-    const guestVehicleRuntime =
-      config.mode === "guest" ? createSimulationRuntime(config.initialState) : null;
     let game: Game;
     try {
-      game = new Game(config, physicsRuntime, simulationRuntime, guestVehicleRuntime);
+      game = new Game(config, physicsRuntime, simulationRuntime);
     } catch (error: unknown) {
       physicsRuntime?.dispose();
       throw error;
@@ -379,6 +382,7 @@ export class Game {
     this.#cityObjects.dispose();
     this.#holeRenderer.dispose();
     this.#powerUpRenderer.dispose();
+    this.#trafficLights.dispose();
     this.#geometries.forEach((geometry) => geometry.dispose());
     this.#materials.forEach((material) => material.dispose());
     this.#textures.forEach((texture) => texture.dispose());
@@ -396,31 +400,8 @@ export class Game {
     this.#renderDeltaAccumulator += frameSeconds;
 
     if (this.#mode === "guest") {
-      // guest：不推进权威模拟（位置/分数由 host 快照决定）。唯一例外是确定性路由车辆：
-      // guest 用与 host 相同的纯函数 advanceRoutedObjects 本地推进，保证全员车辆运动一致。
-      // 详见 AGENTS.md §0.1 与 advanceRoutedObjects 注释。
-      if (this.#guestVehicleRuntime !== null) {
-        let guestSteps = 0;
-        while (
-          this.#matchStarted &&
-          this.#accumulator >= FIXED_STEP_SECONDS &&
-          guestSteps < MAX_STEPS_PER_FRAME
-        ) {
-          const result = advanceRoutedObjects(
-            this.#state,
-            FIXED_STEP_SECONDS,
-            this.#guestVehicleRuntime,
-          );
-          this.#state = result.state;
-          for (const objectId of result.changedObjectIds) this.#guestDirtyObjectIds.add(objectId);
-          this.#accumulator -= FIXED_STEP_SECONDS;
-          guestSteps += 1;
-        }
-        // 超过单帧上限的积压直接丢弃，防止卡顿后螺旋追赶（与 host 一致）。
-        if (this.#accumulator > FIXED_STEP_SECONDS) this.#accumulator = 0;
-      } else {
-        this.#accumulator = 0;
-      }
+      // guest 不推进模拟；车辆在渲染时由 host elapsed 的纯函数位置重建。
+      this.#accumulator = 0;
       if (this.#matchStarted) {
         this.#inputSendAccumulator += frameSeconds;
         if (this.#inputSendAccumulator >= INPUT_SEND_INTERVAL_SECONDS) {
@@ -464,8 +445,11 @@ export class Game {
       this.#state.status === "finished" ||
       time + Number.EPSILON >= this.#nextRenderTime;
     if (renderDue) {
+      const renderElapsed =
+        this.#mode === "guest" ? this.#sampleGuestElapsed(time) : this.#state.elapsed;
+      if (this.#mode === "guest") this.#syncGuestRoutedObjects(renderElapsed);
       if (this.#matchStarted || this.#forceRender) {
-        this.#syncScene(this.#renderDeltaAccumulator);
+        this.#syncScene(this.#renderDeltaAccumulator, renderElapsed);
       }
       this.#renderer.clear(true, true, true);
       this.#renderer.render(this.#scene, this.#camera);
@@ -568,6 +552,8 @@ export class Game {
       worldRevision: this.#worldRevision,
       lastProcessedInputByPeer: this.#lastProcessedInputByPeer,
       emittedConsumed: this.#emittedConsumed,
+      emittedResized: this.#emittedResized,
+      initialObjects: this.#initialObjects,
     });
     this.#snapshotSeq += 1;
     this.#baseWorldRevision = this.#worldRevision;
@@ -597,21 +583,23 @@ export class Game {
 
   /** guest：driver 收到 unreliable 增量快照时合并进渲染 state。 */
   applyDelta(delta: StateDeltaSnapshot): void {
+    const now = performance.now();
+    const renderedElapsed = this.#sampleGuestElapsed(now);
     this.#state = applyDeltaToState(this.#state, delta);
+    this.#guestElapsedFrom = renderedElapsed;
+    this.#guestElapsedTo = delta.elapsed;
+    this.#guestElapsedStartedAt = now;
+    this.#guestElapsedDuration = Math.min(0.1, Math.max(1 / 60, delta.elapsed - renderedElapsed));
     delta.changedObjects.forEach((object) => this.#guestDirtyObjectIds.add(object.id));
     this.#worldRevision = delta.worldRevision;
   }
 
-  /**
-   * guest：driver 收到可靠 checkpoint 后重建可观察世界。
-   * 以**当前** state 为物体基线（而非 #initialState）：非 overridden 物体在 guest 恒正确
-   * （静态建筑=初始、路由车辆=本地推进=与 host 一致），被 host override 的 active/consumed
-   * 仍被纠正。这也修复了一个既有潜在 bug——任何 resync 都会把车辆弹回出生点并永久停住
-   * （车辆不在 delta/checkpoint 里），改成当前基线即保留本地推进位置。
-   */
+  /** guest：driver 收到可靠 checkpoint 后重建可观察世界。 */
   applyCheckpoint(checkpoint: FullStateCheckpoint): void {
     this.#state = applyCheckpointToState(this.#state, checkpoint);
-    this.#guestVehicleRuntime?.reset(this.#state);
+    this.#guestElapsedFrom = checkpoint.elapsed;
+    this.#guestElapsedTo = checkpoint.elapsed;
+    this.#guestElapsedDuration = 0;
     this.#worldRevision = checkpoint.worldRevision;
     this.#guestDirtyObjectIds.clear();
     this.#fullObjectSyncPending = true;
@@ -642,6 +630,7 @@ export class Game {
       hostTick: this.#hostTick,
       worldRevision: this.#worldRevision,
       hostTime: performance.now(),
+      initialObjects: this.#initialObjects,
     });
   }
 
@@ -803,9 +792,10 @@ export class Game {
     this.#scene.add(mesh);
   }
 
-  #syncScene(deltaSeconds: number): void {
+  #syncScene(deltaSeconds: number, renderElapsed = this.#state.elapsed): void {
     this.#holeRenderer.sync(this.#state.holes, this.#state.elapsed, deltaSeconds, this.#leaderId);
     const changedObjects = this.#takeChangedObjectsForRender();
+    this.#trafficLights.sync(changedObjects, renderElapsed);
 
     const player = this.#state.holes.find((hole) => hole.id === this.#localPlayerId);
     if (!player) {
@@ -848,6 +838,29 @@ export class Game {
       this.#viewportHeight,
     );
     this.#updateOpponentIndicators(player);
+  }
+
+  #sampleGuestElapsed(now: number): number {
+    if (this.#guestElapsedDuration <= 0) return this.#guestElapsedTo;
+    const alpha = Math.min(
+      1,
+      (now - this.#guestElapsedStartedAt) / (this.#guestElapsedDuration * 1_000),
+    );
+    return this.#guestElapsedFrom + (this.#guestElapsedTo - this.#guestElapsedFrom) * alpha;
+  }
+
+  #syncGuestRoutedObjects(elapsed: number): void {
+    let nextObjects: WorldObjectState[] | null = null;
+    for (const index of this.#routedVehicleIndices) {
+      const object = (nextObjects ?? this.#state.objects)[index];
+      if (object === undefined || object.status === "consumed") continue;
+      const position = routedPositionAt(object, elapsed);
+      if (position.x === object.position.x && position.y === object.position.y) continue;
+      nextObjects ??= [...this.#state.objects];
+      nextObjects[index] = { ...object, position };
+      this.#guestDirtyObjectIds.add(object.id);
+    }
+    if (nextObjects !== null) this.#state = { ...this.#state, objects: nextObjects };
   }
 
   #takeChangedObjectsForRender(): readonly WorldObjectState[] {

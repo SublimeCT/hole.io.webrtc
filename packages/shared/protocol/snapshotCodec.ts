@@ -39,6 +39,33 @@ export interface DeltaSnapshotInput {
   readonly lastProcessedInputByPeer: ReadonlyMap<string, number>;
   /** host 维护的「已广播 consumed」集合；函数会原地 add，避免每帧重复广播同一消耗。 */
   readonly emittedConsumed: Set<string>;
+  /** host 维护的「已广播 resized」集合；函数会原地 add。 */
+  readonly emittedResized: Set<string>;
+  /** 固定地图的初始物体，用于识别 static 物体的尺寸偏移。 */
+  readonly initialObjects: readonly WorldObjectState[];
+}
+
+function hasDifferentSize(object: WorldObjectState, initial: WorldObjectState): boolean {
+  return (
+    object.sizeMultiplier !== initial.sizeMultiplier ||
+    object.size.x !== initial.size.x ||
+    object.size.y !== initial.size.y ||
+    object.height !== initial.height ||
+    object.fitDiameter !== initial.fitDiameter ||
+    object.centerY !== initial.centerY
+  );
+}
+
+function toResizedOverride(object: WorldObjectState): ObjectStateOverride {
+  return {
+    id: object.id,
+    state: "resized",
+    sizeMultiplier: object.sizeMultiplier,
+    size: object.size,
+    height: object.height,
+    fitDiameter: object.fitDiameter,
+    centerY: object.centerY,
+  };
 }
 
 function toActiveObjectSnapshot(object: WorldObjectState): ActiveObjectSnapshot {
@@ -79,13 +106,23 @@ export function holeToPlayerSnapshot(
 }
 
 /**
- * 产出 ~10Hz unreliable 增量快照。players 全量；changedObjects 只含当前 active 物体 + 本帧新增 consumed；
+ * 产出 unreliable 增量快照。players 全量；changedObjects 含当前 active 物体及本帧新增 resized/consumed；
  * powerUps/footprints/poopHazards 全量（数量少）。静态未变物体不进入快照（guest 本地已知初始状态）。
  */
 export function stateToDeltaSnapshot(input: DeltaSnapshotInput): StateDeltaSnapshot {
   const changedObjects: ObjectStateOverride[] = [];
+  const initialById = new Map(input.initialObjects.map((object) => [object.id, object] as const));
   for (const object of input.state.objects) {
-    if (object.status === "active") {
+    const initial = initialById.get(object.id);
+    if (
+      object.status === "static" &&
+      initial !== undefined &&
+      hasDifferentSize(object, initial) &&
+      !input.emittedResized.has(object.id)
+    ) {
+      changedObjects.push(toResizedOverride(object));
+      input.emittedResized.add(object.id);
+    } else if (object.status === "active") {
       changedObjects.push({
         id: object.id,
         state: "active",
@@ -126,16 +163,21 @@ export interface CheckpointInput {
   readonly hostTick: number;
   readonly worldRevision: number;
   readonly hostTime: number;
+  readonly initialObjects: readonly WorldObjectState[];
 }
 
 /**
  * 可靠 checkpoint：在相同 mapId/seed 基线上独立重建可观察世界。
- * objectOverrides 只列偏离初始状态的物体（active / consumed），仍为初始 static 的物体不传。
+ * objectOverrides 只列偏离初始状态的物体（resized / active / consumed），初始 static 物体不传。
  */
 export function buildFullCheckpoint(input: CheckpointInput): FullStateCheckpoint {
   const objectOverrides: ObjectStateOverride[] = [];
+  const initialById = new Map(input.initialObjects.map((object) => [object.id, object] as const));
   for (const object of input.state.objects) {
-    if (object.status === "active") {
+    const initial = initialById.get(object.id);
+    if (object.status === "static" && initial !== undefined && hasDifferentSize(object, initial)) {
+      objectOverrides.push(toResizedOverride(object));
+    } else if (object.status === "active") {
       objectOverrides.push({
         id: object.id,
         state: "active",
@@ -261,6 +303,16 @@ function applyObjectOverrides(
         angularVelocity: override.object.angularVelocity,
         activeTime: override.object.activeTime,
         motion: null,
+      };
+    }
+    if (override.state === "resized") {
+      return {
+        ...object,
+        sizeMultiplier: override.sizeMultiplier,
+        size: override.size,
+        height: override.height,
+        fitDiameter: override.fitDiameter,
+        centerY: override.centerY,
       };
     }
     // settled：物体落回静止但位置/朝向偏离初始
