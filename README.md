@@ -8,6 +8,9 @@
 
 Hole City 是一个 Hole.io 风格的 Web 3D 城市吞噬游戏。当前仓库的主要可玩入口是单机模式：玩家控制黑洞在城市街区中移动，吞噬车辆、建筑、行人和道路物件，并与两个 Bot 竞争分数。
 
+- 正式站：[https://holeio.xiaban.run/](https://holeio.xiaban.run/)
+- GitHub Pages 镜像：[https://sublimect.github.io/hole.io.webrtc/](https://sublimect.github.io/hole.io.webrtc/)
+
 项目采用 pnpm workspace，游戏模拟、客户端渲染和后续联机协议分层维护。当前版本处于 Phase 1：单机核心玩法已经可运行，联机服务仍在开发中。
 
 ![Hole City 首页截图](./docs/screenshots/home-1080p.png)
@@ -65,7 +68,7 @@ pnpm --filter @hole-io/shared typecheck
 
 首次使用时，在 GitHub 仓库设置中启用 Pages，并将构建来源设为 **GitHub Actions**。Vite 会在 Actions 环境中自动使用仓库名作为静态资源前缀，适配 `https://<user>.github.io/<repo>/` 形式的项目站点。
 
-GitHub Pages 只托管静态客户端。联机模式仍需要部署独立的 Fastify/WebSocket 服务，并将客户端连接地址配置为 HTTPS 页面可访问的 `wss://` 地址；后端的 `CORS_ORIGIN` 应包含 Pages 站点 origin。WebRTC 建连失败时还需要可用的 STUN/TURN 配置。
+GitHub Pages 只托管静态客户端。正式站与 GitHub Pages 镜像均使用 `wss://holeio.xiaban.run/ws` 连接同一套 Fastify/WebSocket 服务；后端的 `CORS_ORIGIN` 必须同时包含两个站点的 origin。WebRTC 建连失败时还需要可用的 STUN/TURN 配置。
 
 ## 游戏玩法
 

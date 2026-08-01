@@ -200,7 +200,7 @@ sudo systemctl enable --now coturn
 sudo install -d -m 0755 /etc/holeio
 sudo tee /etc/holeio/server.env > /dev/null <<'EOF'
 DATABASE_URL=postgres://holeio:<密码>@localhost:5432/holeio
-CORS_ORIGIN=https://<your-domain>
+CORS_ORIGIN=https://holeio.xiaban.run,https://sublimect.github.io
 HOST=127.0.0.1
 TURN_SECRET=<第 1 步生成的 secret>
 STUN_URIS=stun:<公网IP或域名>:3478

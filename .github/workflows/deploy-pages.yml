@@ -38,6 +38,7 @@ jobs:
       - name: Build client
         env:
           PAGES_BUILD: "1"
+          VITE_SIGNALING_URL: wss://holeio.xiaban.run/ws
         run: pnpm --filter @hole-io/client build
 
       - name: Configure Pages
