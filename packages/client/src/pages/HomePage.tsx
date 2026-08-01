@@ -38,30 +38,15 @@ const RING_COLORS = [
 
 const REPO_URL = "https://github.com/SublimeCT/hole.io.webrtc";
 
-type MenuAction = "start" | "settings" | "share" | "online";
+type MenuAction = "start" | "online" | "settings" | "guide" | "about";
+
+type GuideTab = "controls" | "skills" | "items";
 
 interface MenuButton {
   action: MenuAction;
   title: string;
   subtitle: string;
   icon: ReactElement;
-}
-
-async function copyGameLink(url: string): Promise<void> {
-  if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(url);
-    return;
-  }
-  const input = document.createElement("textarea");
-  input.value = url;
-  input.readOnly = true;
-  input.style.position = "fixed";
-  input.style.opacity = "0";
-  document.body.append(input);
-  input.select();
-  const copied = document.execCommand("copy");
-  input.remove();
-  if (!copied) throw new Error("Unable to copy game link");
 }
 
 export function HomePage() {
@@ -88,15 +73,18 @@ export function HomePage() {
     preferences.renderFrameRate,
   );
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [guideOpen, setGuideOpen] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
+  const [guideTab, setGuideTab] = useState<GuideTab>("controls");
   const [focusedMenu, setFocusedMenu] = useState(0);
-  const [toastMessage, setToastMessage] = useState("");
 
   const menuButtons = useRef<Array<HTMLButtonElement | null>>([]);
   const nameInput = useRef<HTMLInputElement>(null);
+  const guideCloseBtn = useRef<HTMLButtonElement>(null);
+  const aboutCloseBtn = useRef<HTMLButtonElement>(null);
   const miniLayer = useRef<HTMLDivElement>(null);
   const holeScene = useRef<HTMLDivElement>(null);
   const starsLayer = useRef<HTMLDivElement>(null);
-  const toastTimer = useRef<number | null>(null);
 
   const buttons: readonly MenuButton[] = [
     {
@@ -106,6 +94,17 @@ export function HomePage() {
       icon: (
         <svg viewBox="0 0 24 24">
           <path d="M7 4l13 8-13 8z" />
+        </svg>
+      ),
+    },
+    {
+      action: "online",
+      title: translate(preferences.language, "online"),
+      subtitle: translate(preferences.language, "onlineSub"),
+      icon: (
+        <svg viewBox="0 0 24 24">
+          <circle cx="12" cy="12" r="9" />
+          <path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" />
         </svg>
       ),
     },
@@ -121,23 +120,23 @@ export function HomePage() {
       ),
     },
     {
-      action: "share",
-      title: translate(preferences.language, "share"),
-      subtitle: translate(preferences.language, "shareSub"),
+      action: "guide",
+      title: translate(preferences.language, "guide"),
+      subtitle: translate(preferences.language, "guideSub"),
       icon: (
         <svg viewBox="0 0 24 24">
-          <path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.5 1.5M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.5-1.5" />
+          <path d="M4 5.5A3.5 3.5 0 0 1 7.5 2H11v17H7.5A3.5 3.5 0 0 0 4 22zM20 5.5A3.5 3.5 0 0 0 16.5 2H13v17h3.5a3.5 3.5 0 0 1 3.5 3z" />
         </svg>
       ),
     },
     {
-      action: "online",
-      title: translate(preferences.language, "online"),
-      subtitle: translate(preferences.language, "onlineSub"),
+      action: "about",
+      title: translate(preferences.language, "about"),
+      subtitle: translate(preferences.language, "aboutSub"),
       icon: (
         <svg viewBox="0 0 24 24">
           <circle cx="12" cy="12" r="9" />
-          <path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" />
+          <path d="M12 10v6M12 7h.01" />
         </svg>
       ),
     },
@@ -150,6 +149,14 @@ export function HomePage() {
   useEffect(() => {
     if (settingsOpen) nameInput.current?.focus();
   }, [settingsOpen]);
+
+  useEffect(() => {
+    if (guideOpen) guideCloseBtn.current?.focus();
+  }, [guideOpen]);
+
+  useEffect(() => {
+    if (aboutOpen) aboutCloseBtn.current?.focus();
+  }, [aboutOpen]);
 
   // 粒子（向右漂移，与网格节奏一致）
   useEffect(() => {
@@ -224,27 +231,29 @@ export function HomePage() {
   }, []);
 
   useEffect(() => {
-    return () => {
-      if (toastTimer.current !== null) {
-        window.clearTimeout(toastTimer.current);
-      }
-    };
-  }, []);
-
-  const showToast = (message: string): void => {
-    setToastMessage(message);
-    if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
-    toastTimer.current = window.setTimeout(() => setToastMessage(""), 2200);
-  };
-
-  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.ctrlKey || event.metaKey) return;
       if (settingsOpen) {
         if (event.code === "Escape") {
           event.preventDefault();
           setSettingsOpen(false);
-          menuButtons.current[1]?.focus();
+          menuButtons.current[2]?.focus(); // 设置按钮
+        }
+        return;
+      }
+      if (guideOpen) {
+        if (event.code === "Escape") {
+          event.preventDefault();
+          setGuideOpen(false);
+          menuButtons.current[3]?.focus(); // 玩法介绍按钮
+        }
+        return;
+      }
+      if (aboutOpen) {
+        if (event.code === "Escape") {
+          event.preventDefault();
+          setAboutOpen(false);
+          menuButtons.current[4]?.focus(); // 关于按钮
         }
         return;
       }
@@ -261,12 +270,18 @@ export function HomePage() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [buttons.length, settingsOpen]);
+  }, [buttons.length, settingsOpen, guideOpen, aboutOpen]);
 
   const triggerAction = async (action: MenuAction): Promise<void> => {
     switch (action) {
       case "start":
         navigate("/game");
+        return;
+      case "online":
+        // 主页联机 = 新会话：清掉可能残留的旧房间 session（玩家未点离开、经浏览器后退回主页等），
+        // 避免再次进入联机时复用旧房间。
+        disposeSession();
+        navigate({ pathname: "/online", search: "" });
         return;
       case "settings":
         setDraftName(preferences.playerName);
@@ -275,39 +290,13 @@ export function HomePage() {
         setDraftRenderFrameRate(preferences.renderFrameRate);
         setSettingsOpen(true);
         return;
-      case "share":
-        await shareGame();
+      case "guide":
+        setGuideTab("controls");
+        setGuideOpen(true);
         return;
-      case "online":
-        // 主页联机 = 新会话：清掉可能残留的旧房间 session（玩家未点离开、经浏览器后退回主页等），
-        // 避免再次进入联机时复用旧房间。
-        disposeSession();
-        navigate({ pathname: "/online", search: "" });
+      case "about":
+        setAboutOpen(true);
         return;
-    }
-  };
-
-  const shareGame = async (): Promise<void> => {
-    const url = `${window.location.origin}${window.location.pathname}#/`;
-    try {
-      if (navigator.share) {
-        await navigator.share({
-          title: translate(preferences.language, "title"),
-          text: translate(preferences.language, "shareText"),
-          url,
-        });
-        showToast(translate(preferences.language, "shareOpened"));
-      } else {
-        await copyGameLink(url);
-        showToast(translate(preferences.language, "linkCopied"));
-      }
-    } catch {
-      try {
-        await copyGameLink(url);
-        showToast(translate(preferences.language, "linkCopied"));
-      } catch {
-        showToast(translate(preferences.language, "shareFailed"));
-      }
     }
   };
 
@@ -331,7 +320,7 @@ export function HomePage() {
     persistPreferences(nextPreferences);
     applyDocumentLanguage(draftLanguage);
     setSettingsOpen(false);
-    menuButtons.current[1]?.focus();
+    menuButtons.current[2]?.focus(); // 设置按钮
   };
 
   return (
@@ -452,7 +441,24 @@ export function HomePage() {
           }}
         >
           <form className="home-modal-sheet" onSubmit={submitSettings}>
-            <h2>{translate(preferences.language, "settings")}</h2>
+            <div className="home-modal-head">
+              <div className="home-modal-head-title">
+                <span className="home-modal-head-eyebrow">
+                  VOID / {translate(preferences.language, "settings")}
+                </span>
+                <h2>{translate(preferences.language, "settings")}</h2>
+              </div>
+              <button
+                className="home-modal-close"
+                type="button"
+                aria-label={translate(preferences.language, "close")}
+                onClick={() => setSettingsOpen(false)}
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M6 6l12 12M18 6 6 18" />
+                </svg>
+              </button>
+            </div>
             <div className="home-field">
               <label className="home-field-label" htmlFor="player-name">
                 {translate(preferences.language, "playerName")}
@@ -545,16 +551,390 @@ export function HomePage() {
         </div>
       )}
 
-      <div
-        className={`home-toast ${toastMessage ? "is-visible" : ""}`}
-        role="status"
-        aria-live="polite"
-      >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M20 6 9 17l-5-5" />
-        </svg>
-        <span>{toastMessage}</span>
-      </div>
+      {guideOpen && (
+        <div
+          className="home-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-label={translate(preferences.language, "guide")}
+          onClick={(event) => {
+            if (event.target === event.currentTarget) setGuideOpen(false);
+          }}
+        >
+          <div className="home-modal-sheet home-guide-sheet">
+            <div className="home-modal-head">
+              <div className="home-modal-head-title">
+                <span className="home-modal-head-eyebrow">
+                  VOID / {translate(preferences.language, "guide")}
+                </span>
+                <h2>{translate(preferences.language, "guide")}</h2>
+              </div>
+              <button
+                ref={guideCloseBtn}
+                className="home-modal-close"
+                type="button"
+                aria-label={translate(preferences.language, "close")}
+                onClick={() => setGuideOpen(false)}
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M6 6l12 12M18 6 6 18" />
+                </svg>
+              </button>
+            </div>
+            <div
+              className="home-guide-tabs"
+              role="tablist"
+              aria-label={translate(preferences.language, "guide")}
+            >
+              {(["controls", "skills", "items"] as const).map((tab) => {
+                const label =
+                  tab === "controls"
+                    ? translate(preferences.language, "guideTabControls")
+                    : tab === "skills"
+                      ? translate(preferences.language, "guideTabSkills")
+                      : translate(preferences.language, "guideTabItems");
+                return (
+                  <button
+                    key={tab}
+                    className={`home-guide-tab ${guideTab === tab ? "is-on" : ""}`}
+                    role="tab"
+                    aria-selected={guideTab === tab}
+                    type="button"
+                    onClick={() => setGuideTab(tab)}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="home-guide-body">
+              {guideTab === "controls" && (
+                <div className="home-control-grid">
+                  <article className="home-control-card">
+                    <h3>
+                      {translate(preferences.language, "guidePcTitle")}
+                      <span>{translate(preferences.language, "guidePcBadge")}</span>
+                    </h3>
+                    <div className="home-guide-row">
+                      <b>{translate(preferences.language, "guideMove")}</b>
+                      <div className="home-keyset">
+                        <kbd>W</kbd>
+                        <kbd>A</kbd>
+                        <kbd>S</kbd>
+                        <kbd>D</kbd>
+                      </div>
+                    </div>
+                    <div className="home-guide-row">
+                      <b>{translate(preferences.language, "guideAbility")}</b>
+                      <div className="home-keyset">
+                        <kbd>Q</kbd>
+                        <kbd>E</kbd>
+                        <kbd>R</kbd>
+                      </div>
+                    </div>
+                    <div className="home-guide-row">
+                      <b>{translate(preferences.language, "guideMethod")}</b>
+                      <span>{translate(preferences.language, "guidePcMethod")}</span>
+                    </div>
+                  </article>
+                  <article className="home-control-card">
+                    <h3>
+                      {translate(preferences.language, "guideMobileTitle")}
+                      <span>{translate(preferences.language, "guideMobileBadge")}</span>
+                    </h3>
+                    <div className="home-touch-zone" aria-hidden="true">
+                      <span className="home-touch-zone-label">
+                        {translate(preferences.language, "guideTouchZone")}
+                      </span>
+                    </div>
+                    <div className="home-guide-row">
+                      <b>{translate(preferences.language, "guideMove")}</b>
+                      <span>{translate(preferences.language, "guideMobileMoveDesc")}</span>
+                    </div>
+                    <div className="home-guide-row">
+                      <b>{translate(preferences.language, "guideAbility")}</b>
+                      <span>{translate(preferences.language, "guideMobileAbilityDesc")}</span>
+                    </div>
+                  </article>
+                </div>
+              )}
+              {guideTab === "skills" && (
+                <div className="home-skill-list">
+                  <article className="home-guide-skill">
+                    <span className="home-guide-skill-key">Q</span>
+                    <span className="home-guide-skill-meta">
+                      <b>{translate(preferences.language, "guideSec", { n: 5 })}</b>
+                      {translate(preferences.language, "guideCooldown", { n: 15 })}
+                    </span>
+                    <h3>{translate(preferences.language, "guideSkillQ")}</h3>
+                    <p>{translate(preferences.language, "guideSkillQDesc")}</p>
+                  </article>
+                  <article className="home-guide-skill">
+                    <span className="home-guide-skill-key">E</span>
+                    <span className="home-guide-skill-meta">
+                      <b>{translate(preferences.language, "guideImmediate")}</b>
+                      {translate(preferences.language, "guideCooldown", { n: 25 })}
+                    </span>
+                    <h3>{translate(preferences.language, "guideSkillE")}</h3>
+                    <p>{translate(preferences.language, "guideSkillEDesc")}</p>
+                  </article>
+                  <article className="home-guide-skill home-guide-skill-danger">
+                    <span className="home-guide-skill-key">R</span>
+                    <span className="home-guide-skill-meta">
+                      <b>{translate(preferences.language, "guideFuse", { n: 3 })}</b>
+                      {translate(preferences.language, "guideCooldown", { n: 45 })}
+                    </span>
+                    <h3>{translate(preferences.language, "guideSkillR")}</h3>
+                    <p>{translate(preferences.language, "guideSkillRDesc")}</p>
+                  </article>
+                </div>
+              )}
+              {guideTab === "items" && (
+                <div className="home-item-list">
+                  <article className="home-guide-item">
+                    <span className="home-guide-item-emoji" aria-hidden="true">
+                      🧲
+                    </span>
+                    <div>
+                      <h3>{translate(preferences.language, "guideItemMagnet")}</h3>
+                      <p>{translate(preferences.language, "guideItemMagnetDesc")}</p>
+                    </div>
+                  </article>
+                  <article className="home-guide-item">
+                    <span className="home-guide-item-emoji" aria-hidden="true">
+                      🔍
+                    </span>
+                    <div>
+                      <h3>{translate(preferences.language, "guideItemShrink")}</h3>
+                      <p>{translate(preferences.language, "guideItemShrinkDesc")}</p>
+                    </div>
+                  </article>
+                  <article className="home-guide-item">
+                    <span className="home-guide-item-emoji" aria-hidden="true">
+                      🦶
+                    </span>
+                    <div>
+                      <h3>{translate(preferences.language, "guideItemFootprint")}</h3>
+                      <p>{translate(preferences.language, "guideItemFootprintDesc")}</p>
+                    </div>
+                  </article>
+                  <article className="home-guide-item">
+                    <span className="home-guide-item-emoji" aria-hidden="true">
+                      🍔
+                    </span>
+                    <div>
+                      <h3>{translate(preferences.language, "guideItemBurger")}</h3>
+                      <p>{translate(preferences.language, "guideItemBurgerDesc")}</p>
+                    </div>
+                  </article>
+                  <article className="home-guide-item">
+                    <span className="home-guide-item-emoji" aria-hidden="true">
+                      💩
+                    </span>
+                    <div>
+                      <h3>{translate(preferences.language, "guideItemPoop")}</h3>
+                      <p>{translate(preferences.language, "guideItemPoopDesc")}</p>
+                    </div>
+                  </article>
+                  <article className="home-guide-item">
+                    <span className="home-guide-item-emoji" aria-hidden="true">
+                      👣
+                    </span>
+                    <div>
+                      <h3>{translate(preferences.language, "guideItemDoubleFootprint")}</h3>
+                      <p>{translate(preferences.language, "guideItemDoubleFootprintDesc")}</p>
+                    </div>
+                  </article>
+                  <article className="home-guide-item home-guide-item-wide">
+                    <span className="home-guide-item-emoji" aria-hidden="true">
+                      🍺
+                    </span>
+                    <div>
+                      <h3>{translate(preferences.language, "guideItemBeer")}</h3>
+                      <p>{translate(preferences.language, "guideItemBeerDesc")}</p>
+                    </div>
+                  </article>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {aboutOpen && (
+        <div
+          className="home-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-label={translate(preferences.language, "about")}
+          onClick={(event) => {
+            if (event.target === event.currentTarget) setAboutOpen(false);
+          }}
+        >
+          <div className="home-modal-sheet home-about-sheet">
+            <div className="home-modal-head">
+              <div className="home-modal-head-title">
+                <span className="home-modal-head-eyebrow">
+                  VOID / {translate(preferences.language, "about")}
+                </span>
+                <h2>{translate(preferences.language, "about")}</h2>
+              </div>
+              <button
+                ref={aboutCloseBtn}
+                className="home-modal-close"
+                type="button"
+                aria-label={translate(preferences.language, "close")}
+                onClick={() => setAboutOpen(false)}
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M6 6l12 12M18 6 6 18" />
+                </svg>
+              </button>
+            </div>
+            <div className="home-about-body">
+              <div className="home-about-intro">
+                <p>{translate(preferences.language, "aboutIntro")}</p>
+                <span className="home-about-vibe">VIBE CODING</span>
+              </div>
+              <section className="home-about-section">
+                <h3>{translate(preferences.language, "aboutLinks")}</h3>
+                <div className="home-about-links">
+                  <a
+                    className="home-about-link home-about-link-wide"
+                    href={REPO_URL}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <span className="home-about-logo">GH</span>
+                    <span className="home-about-copy">
+                      <b>{translate(preferences.language, "aboutRepo")}</b>
+                      <small>github.com/SublimeCT/hole.io.webrtc</small>
+                    </span>
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M14 5h5v5M19 5l-9 9M19 14v5H5V5h5" />
+                    </svg>
+                  </a>
+                  <a
+                    className="home-about-link home-about-link-wide"
+                    href="https://blog.xiaban.run/"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <span className="home-about-logo">XB</span>
+                    <span className="home-about-copy">
+                      <b>{translate(preferences.language, "aboutBlog")}</b>
+                      <small>blog.xiaban.run</small>
+                    </span>
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M14 5h5v5M19 5l-9 9M19 14v5H5V5h5" />
+                    </svg>
+                  </a>
+                </div>
+              </section>
+              <section className="home-about-section">
+                <h3>{translate(preferences.language, "aboutTech")}</h3>
+                <div className="home-about-links">
+                  <a
+                    className="home-about-link"
+                    href="https://react.dev/"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <span className="home-about-logo">R</span>
+                    <span className="home-about-copy">
+                      <b>React</b>
+                      <small>{translate(preferences.language, "aboutReactDesc")}</small>
+                    </span>
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M14 5h5v5M19 5l-9 9M19 14v5H5V5h5" />
+                    </svg>
+                  </a>
+                  <a
+                    className="home-about-link"
+                    href="https://threejs.org/"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <span className="home-about-logo">3D</span>
+                    <span className="home-about-copy">
+                      <b>three.js</b>
+                      <small>{translate(preferences.language, "aboutThreeDesc")}</small>
+                    </span>
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M14 5h5v5M19 5l-9 9M19 14v5H5V5h5" />
+                    </svg>
+                  </a>
+                  <a
+                    className="home-about-link"
+                    href="https://webrtc.org/"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <span className="home-about-logo">RTC</span>
+                    <span className="home-about-copy">
+                      <b>WebRTC</b>
+                      <small>{translate(preferences.language, "aboutWebRTCDesc")}</small>
+                    </span>
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M14 5h5v5M19 5l-9 9M19 14v5H5V5h5" />
+                    </svg>
+                  </a>
+                  <a
+                    className="home-about-link"
+                    href="https://kenney.nl/assets"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <span className="home-about-logo">K</span>
+                    <span className="home-about-copy">
+                      <b>Kenney</b>
+                      <small>{translate(preferences.language, "aboutKenneyDesc")}</small>
+                    </span>
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M14 5h5v5M19 5l-9 9M19 14v5H5V5h5" />
+                    </svg>
+                  </a>
+                </div>
+              </section>
+              <section className="home-about-section">
+                <h3>{translate(preferences.language, "aboutLLM")}</h3>
+                <div className="home-about-links">
+                  <a
+                    className="home-about-link"
+                    href="https://openai.com/"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <span className="home-about-logo">AI</span>
+                    <span className="home-about-copy">
+                      <b>ChatGPT</b>
+                      <small>{translate(preferences.language, "aboutChatGPTDesc")}</small>
+                    </span>
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M14 5h5v5M19 5l-9 9M19 14v5H5V5h5" />
+                    </svg>
+                  </a>
+                  <a
+                    className="home-about-link"
+                    href="https://bigmodel.cn/"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <span className="home-about-logo">GLM</span>
+                    <span className="home-about-copy">
+                      <b>glm-5.2</b>
+                      <small>{translate(preferences.language, "aboutGLMDesc")}</small>
+                    </span>
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M14 5h5v5M19 5l-9 9M19 14v5H5V5h5" />
+                    </svg>
+                  </a>
+                </div>
+              </section>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }

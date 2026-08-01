@@ -707,6 +707,61 @@
   margin-bottom: 18px;
 }
 
+/* 弹窗 header（eyebrow + 标题 + 关闭按钮），与玩法介绍/关于弹窗共用 */
+.home-modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+.home-modal-head-title {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.home-modal-head-title h2 {
+  margin-bottom: 0;
+}
+.home-modal-head-eyebrow {
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.home-modal-close {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  color: var(--muted);
+  border: 1px solid transparent;
+  transition:
+    color 0.15s,
+    border-color 0.15s,
+    background 0.15s;
+}
+.home-modal-close:hover {
+  color: var(--fg);
+  border-color: var(--border);
+  background: var(--surface-2);
+}
+.home-modal-close svg {
+  width: 20px;
+  height: 20px;
+  stroke: currentColor;
+  stroke-width: 2;
+  fill: none;
+  stroke-linecap: round;
+}
+
 .home-field {
   margin-bottom: 18px;
 }
@@ -853,42 +908,376 @@
   box-shadow: 0 0 22px color-mix(in oklch, var(--accent) 42%, transparent);
 }
 
-/* ---- toast ---- */
-.home-toast {
-  position: fixed;
-  left: 50%;
-  bottom: max(28px, env(safe-area-inset-bottom));
-  transform: translateX(-50%) translateY(20px);
-  background: var(--surface-2);
-  border: 1px solid var(--border-strong);
-  border-radius: 12px;
-  padding: 12px 20px;
-  font-weight: 600;
-  font-size: 15px;
+/* ---- 玩法介绍 / 关于 弹窗 ---- */
+/* 这两个弹窗贴边布局：sheet 去 padding，head/body 各自留白、body 单独滚动 */
+.home-guide-sheet,
+.home-about-sheet {
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.home-guide-sheet {
+  width: min(620px, 94vw);
+}
+.home-about-sheet {
+  width: min(560px, 94vw);
+}
+.home-guide-sheet .home-modal-head,
+.home-about-sheet .home-modal-head {
+  padding: 22px 24px 16px;
+  margin-bottom: 0;
+  flex: none;
+}
+.home-guide-body,
+.home-about-body {
+  padding: 24px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* 玩法介绍 tab */
+.home-guide-tabs {
+  display: flex;
+  gap: 6px;
+  padding: 8px 24px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in oklch, var(--bg) 35%, transparent);
+  flex: none;
+}
+.home-guide-tab {
+  min-height: 44px;
+  padding: 0 20px;
+  border-radius: 9px;
+  color: var(--muted);
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: 0.04em;
+  transition:
+    color 0.18s,
+    background 0.18s,
+    box-shadow 0.18s;
+}
+.home-guide-tab.is-on {
+  color: var(--ink-on-accent);
+  background: var(--accent);
+  box-shadow: 0 0 18px color-mix(in oklch, var(--accent) 28%, transparent);
+}
+
+/* 操作面板 */
+.home-control-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+.home-control-card {
+  min-height: 224px;
+  padding: 22px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: color-mix(in oklch, var(--surface-2) 34%, transparent);
+}
+.home-control-card h3 {
+  font-family: var(--font-display);
+  font-size: 17px;
   letter-spacing: 0.02em;
-  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.5);
-  opacity: 0;
-  pointer-events: none;
-  z-index: 90;
-  transition: 0.25s;
+  margin-bottom: 18px;
   display: flex;
   align-items: center;
+  justify-content: space-between;
+}
+.home-control-card h3 span {
+  font-family: var(--font-body);
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+.home-guide-row {
+  display: grid;
+  grid-template-columns: 92px 1fr;
+  gap: 12px;
+  padding: 11px 0;
+  border-top: 1px solid var(--border);
+  font-size: 14px;
+  line-height: 1.45;
+  align-items: center;
+}
+.home-guide-row b {
+  font-family: var(--font-display);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+}
+.home-guide-row span {
+  color: var(--muted);
+}
+.home-keyset {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+.home-keyset kbd {
+  min-width: 28px;
+  height: 28px;
+  padding: 0 7px;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 3px;
+  background: var(--surface);
+  font-family: var(--font-display);
+  font-size: 11px;
+  color: var(--fg);
+}
+.home-touch-zone {
+  position: relative;
+  height: 54px;
+  margin-bottom: 4px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 10px;
+  background: radial-gradient(
+    circle at 52% 52%,
+    color-mix(in oklch, var(--accent) 14%, transparent),
+    transparent 58%
+  );
+  overflow: hidden;
+}
+.home-touch-zone-label {
+  position: absolute;
+  left: 12px;
+  top: 9px;
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: 0.06em;
+}
+.home-touch-zone::after {
+  content: "";
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  left: 52%;
+  top: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 13px var(--accent);
+  animation: home-touch-move 2.8s ease-in-out infinite;
+}
+@keyframes home-touch-move {
+  0%,
+  100% {
+    transform: translate(-50%, -50%);
+  }
+  35% {
+    transform: translate(56px, -17px);
+  }
+  70% {
+    transform: translate(-64px, 8px);
+  }
+}
+
+/* 技能面板 */
+.home-skill-list {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+.home-guide-skill {
+  position: relative;
+  padding: 20px;
+  min-height: 190px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: color-mix(in oklch, var(--surface-2) 34%, transparent);
+  overflow: hidden;
+}
+.home-guide-skill-key {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in oklch, var(--accent) 50%, transparent);
+  color: var(--accent);
+  font-family: var(--font-display);
+  font-weight: 900;
+  margin-bottom: 26px;
+}
+.home-guide-skill-danger .home-guide-skill-key {
+  color: var(--danger);
+  border-color: color-mix(in oklch, var(--danger) 50%, transparent);
+}
+.home-guide-skill-meta {
+  position: absolute;
+  right: 18px;
+  top: 20px;
+  text-align: right;
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.55;
+}
+.home-guide-skill-meta b {
+  display: block;
+  color: var(--fg);
+  font-family: var(--font-display);
+  font-size: 12px;
+}
+.home-guide-skill h3 {
+  font-family: var(--font-display);
+  font-size: 18px;
+  margin-bottom: 7px;
+}
+.home-guide-skill p {
+  font-size: 14px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+/* 道具面板 */
+.home-item-list {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.home-guide-item {
+  display: grid;
+  grid-template-columns: 42px 1fr;
+  gap: 13px;
+  padding: 15px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: color-mix(in oklch, var(--surface-2) 28%, transparent);
+}
+.home-guide-item-emoji {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  font-size: 22px;
+}
+.home-guide-item h3 {
+  font-family: var(--font-display);
+  font-size: 15px;
+  margin-bottom: 4px;
+  letter-spacing: 0.01em;
+}
+.home-guide-item p {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.home-guide-item-wide {
+  grid-column: 1 / -1;
+}
+
+/* 关于弹窗正文 */
+.home-about-intro {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--border);
+}
+.home-about-intro p {
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.5;
+  max-width: 48ch;
+}
+.home-about-vibe {
+  flex: none;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in oklch, var(--accent) 38%, transparent);
+  color: var(--accent);
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+.home-about-section {
+  padding-top: 20px;
+}
+.home-about-section h3 {
+  font-family: var(--font-display);
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  margin-bottom: 10px;
+  text-transform: uppercase;
+}
+.home-about-links {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 9px;
 }
-
-.home-toast.is-visible {
-  opacity: 1;
-  transform: translateX(-50%) translateY(0);
+.home-about-link {
+  min-height: 60px;
+  padding: 11px 13px;
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) 18px;
+  align-items: center;
+  gap: 11px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: color-mix(in oklch, var(--surface-2) 30%, transparent);
+  transition:
+    transform 0.16s,
+    border-color 0.16s,
+    background 0.16s;
 }
-
-.home-toast svg {
-  width: 18px;
-  height: 18px;
-  stroke: var(--accent);
-  stroke-width: 2;
+.home-about-link:hover {
+  transform: translateY(-2px);
+  border-color: var(--border-strong);
+  background: color-mix(in oklch, var(--surface-2) 58%, transparent);
+}
+.home-about-logo {
+  width: 38px;
+  height: 38px;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 12px;
+  color: var(--fg);
+}
+.home-about-copy {
+  min-width: 0;
+}
+.home-about-copy b {
+  display: block;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+.home-about-copy small {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.home-about-link svg {
+  width: 16px;
+  height: 16px;
+  stroke: var(--muted);
+  stroke-width: 1.8;
   fill: none;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+.home-about-link-wide {
+  grid-column: 1 / -1;
 }
 
 /* ---- 响应式 ---- */
@@ -927,6 +1316,52 @@
   }
   .home-gh-btn {
     padding: 9px;
+  }
+  /* 弹窗在移动端改为贴底抽屉、单列布局 */
+  .home-modal {
+    padding: 10px;
+    align-items: flex-end;
+  }
+  .home-modal-sheet {
+    width: 100%;
+    max-width: none;
+    border-radius: 18px 18px 10px 10px;
+  }
+  .home-guide-sheet,
+  .home-about-sheet {
+    max-height: 88dvh;
+  }
+  .home-guide-sheet .home-modal-head,
+  .home-about-sheet .home-modal-head {
+    padding: 17px 18px 12px;
+  }
+  .home-guide-tabs {
+    padding: 7px 18px;
+  }
+  .home-guide-tab {
+    flex: 1;
+    padding: 0 10px;
+  }
+  .home-guide-body,
+  .home-about-body {
+    padding: 18px;
+  }
+  .home-control-grid,
+  .home-skill-list,
+  .home-item-list,
+  .home-about-links {
+    grid-template-columns: 1fr;
+  }
+  .home-guide-item-wide,
+  .home-about-link-wide {
+    grid-column: auto;
+  }
+  .home-about-intro {
+    display: block;
+  }
+  .home-about-vibe {
+    display: inline-block;
+    margin-top: 14px;
   }
 }
 
