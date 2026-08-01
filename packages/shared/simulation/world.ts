@@ -880,9 +880,9 @@ function buildCityObjects(): readonly WorldObjectState[] {
 
   let characterIndex = 0;
   const nextCharacter = (): string => {
-    const suffix = String.fromCharCode(97 + (characterIndex % 8));
     characterIndex += 1;
-    return `character-${suffix}`;
+    // 角色统一用单一 prefab（几何体相同，外观差异由渲染层染色提供）。
+    return "character-a";
   };
   const addSidewalkCharacters = (
     axis: RouteMotion["axis"],

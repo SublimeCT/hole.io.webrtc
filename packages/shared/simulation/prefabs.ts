@@ -81,38 +81,19 @@ const COMMERCIAL_BUILDING_DEFINITIONS: readonly PrefabDefinition[] = [
   })),
 ];
 
-const CHARACTER_LABELS = [
-  "Outdoor pedestrian",
-  "Red-shirt pedestrian",
-  "Senior pedestrian",
-  "Crash-test character",
-  "Purple-shirt pedestrian",
-  "Green-shirt pedestrian",
-  "Red service robot",
-  "Purple service robot",
-  "Scientist",
-  "Police officer",
-  "Casual pedestrian",
-  "Suited zombie",
-  "Utility worker",
-  "Mime",
-  "Casual zombie",
-  "Uniformed pedestrian",
-  "Business pedestrian",
-  "Ninja character",
-] as const;
-
-const CHARACTER_DEFINITIONS: readonly PrefabDefinition[] = CHARACTER_LABELS.map((label, index) => {
-  const suffix = String.fromCharCode(97 + index);
-  return {
-    id: `character-${suffix}`,
-    label,
-    assetPath: `${CHARACTER_ROOT}/character-${suffix}.glb`,
+// 所有角色 GLB 的几何体逐字节相同（同一套 blocky rig），只有贴图不同；且角色全部静止、
+// 不播动画。因此只保留一个 prefab、只加载一份 character-a.glb，外观差异由渲染层 per-instance
+// 染色（instanceColor）提供。详见 docs 与 CityObjectRenderer。
+const CHARACTER_DEFINITIONS: readonly PrefabDefinition[] = [
+  {
+    id: "character-a",
+    label: "Pedestrian",
+    assetPath: `${CHARACTER_ROOT}/character-a.glb`,
     shape: "box",
     size: { x: 0.72, y: 0.52 },
     height: 1.8,
-  };
-});
+  },
+];
 
 function extraPrefab(
   id: string,

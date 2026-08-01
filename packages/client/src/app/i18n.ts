@@ -456,5 +456,5 @@ export function translate(
 export function applyDocumentLanguage(language: Language): void {
   document.documentElement.lang = language;
   document.documentElement.dir = language === "ar" ? "rtl" : "ltr";
-  document.title = "深渊吞噬 VOID";
+  document.title = "深渊吞噬 VOID | 免费在线 3D 黑洞吞噬游戏";
 }

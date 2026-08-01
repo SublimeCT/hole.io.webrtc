@@ -740,7 +740,7 @@ describe("world defaults", () => {
       definition.assetPath.replace(/^\/kits\//, ""),
     ).toSorted();
     expect(shippedModels).toEqual(registeredModels);
-    expect(PREFAB_DEFINITIONS).toHaveLength(149);
+    expect(PREFAB_DEFINITIONS).toHaveLength(132);
     expect(HIGHEST_BUILDING_PREFAB_ID).toBe("commercial-skyscraper-d");
     const buildingDefinitions = PREFAB_DEFINITIONS.filter(
       (definition) =>

@@ -82,6 +82,7 @@ export class CityObjectRenderer {
   readonly #scale = new THREE.Vector3(1, 1, 1);
   readonly #worldMatrix = new THREE.Matrix4();
   readonly #partMatrix = new THREE.Matrix4();
+  readonly #tintScratch = new THREE.Color();
   readonly #textures = new Set<THREE.Texture>();
   /** 按可视属性复用 MeshBasicMaterial，避免每个 prefab part 各建一份等价材质。 */
   readonly #materialCache = new Map<string, THREE.MeshBasicMaterial>();
@@ -145,6 +146,8 @@ export class CityObjectRenderer {
       }
       for (const [batchKey, batchObjects] of objectsByBatch) {
         const instanceCount = batchObjects.reduce((total, object) => total + object.stackLayers, 0);
+        // 角色共享同一网格，外观差异由 per-instance 染色（instanceColor）提供。
+        const isCharacterPrefab = definition.id.startsWith("character-");
         const hasDynamicInstances =
           prefab.animations.length === 0 && batchObjects.some((object) => object.motion !== null);
         const meshes = prefab.parts.map((part) => {
@@ -186,11 +189,20 @@ export class CityObjectRenderer {
           } else {
             this.#setInstanceTransforms(batch, indices, object);
           }
+          if (isCharacterPrefab) {
+            const tint = this.#characterTint(this.#tintScratch, object.id);
+            for (const mesh of meshes) {
+              for (const index of indices) mesh.setColorAt(index, tint);
+            }
+          }
           this.#lastStatus.set(object.id, object.status);
           this.#lastSizeMultiplier.set(object.id, object.sizeMultiplier);
         });
         meshes.forEach((mesh) => {
           mesh.instanceMatrix.needsUpdate = true;
+          if (isCharacterPrefab && mesh.instanceColor) {
+            mesh.instanceColor.needsUpdate = true;
+          }
           mesh.computeBoundingSphere();
         });
       }
@@ -549,6 +561,21 @@ export class CityObjectRenderer {
     return material;
   }
 
+  /**
+   * 把对象 id 哈希成稳定的色相，写入 target 并返回。
+   * 基于 id → 多端一致（id 在快照里）、跨帧稳定（不闪烁）。instanceColor 是与贴图相乘，
+   * 必须有足够饱和度才能在贴图上看出色相差异——lightness 过高会接近白色、等于没染色；
+   * 代价是整体略微变暗。供角色 instanceColor 与被吞噬时的克隆材质 color 共用。
+   */
+  #characterTint(target: THREE.Color, id: string): THREE.Color {
+    let hash = 0;
+    for (let i = 0; i < id.length; i += 1) {
+      hash = (Math.imul(hash, 31) + id.charCodeAt(i)) | 0;
+    }
+    const hue = (((hash % 360) + 360) % 360) / 360;
+    return target.setHSL(hue, 0.55, 0.65);
+  }
+
   #setInstanceTransforms(
     batch: InstanceBatch,
     indices: readonly number[],
@@ -605,10 +632,16 @@ export class CityObjectRenderer {
       return existing;
     }
     const model = this.#createStackedModel(prefab, object);
+    const isCharacter = object.prefabId.startsWith("character-");
     model.traverse((child) => {
       if (!(child instanceof THREE.Mesh)) return;
       const materials = Array.isArray(child.material) ? child.material : [child.material];
       const clones = materials.map((material) => material.clone());
+      // 角色实例在静态批次里靠 instanceColor 染色；被吞噬时切到克隆 Group，这里把同一染色写进
+      // 克隆材质的 color，避免下沉瞬间跳回未染色的基础贴图。
+      if (isCharacter) {
+        for (const clone of clones) this.#characterTint(clone.color, object.id);
+      }
       child.material = clones.length === 1 ? (clones[0] ?? child.material) : clones;
     });
     this.#activeModels.set(id, model);
