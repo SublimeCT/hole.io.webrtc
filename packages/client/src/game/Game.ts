@@ -159,6 +159,7 @@ export class Game {
   readonly #cameraTarget = new THREE.Vector3();
   readonly #cameraDesired = new THREE.Vector3();
   readonly #cameraOffset = new THREE.Vector3(0, 20, 15);
+  readonly #cameraLookAt = new THREE.Vector3();
   readonly #scoreWorldPosition = new THREE.Vector3();
   readonly #opponentDelta = new THREE.Vector3();
   readonly #cameraForward = new THREE.Vector3();
@@ -821,7 +822,17 @@ export class Game {
     const followAlpha = 1 - Math.exp(-5.5 * deltaSeconds);
     this.#camera.position.lerp(this.#cameraDesired, followAlpha);
     this.#camera.up.set(0, doubleFoot ? 0 : 1, doubleFoot ? -1 : 0);
-    this.#camera.lookAt(this.#cameraTarget);
+    // lookAt 目标必须跟随「已滞后」的相机位置，而不是实时的玩家位置。
+    // camera.position 用 lerp 追逐 cameraDesired，必然滞后于 cameraTarget（实时玩家位置）；
+    // 若直接 lookAt(cameraTarget)，这个滞后量会混进视线方向，使其随移动方向轻微偏转、
+    // 停下又回正——正是移动时「视角轻微旋转马上回正」的来源。
+    // 令 lookAt 目标 = cameraTarget + camera.position - cameraDesired，视线方向即恒为
+    // -(cameraDesired - cameraTarget)，与滞后无关，移动中不再产生偏转。
+    this.#cameraLookAt
+      .copy(this.#cameraTarget)
+      .add(this.#camera.position)
+      .sub(this.#cameraDesired);
+    this.#camera.lookAt(this.#cameraLookAt);
     this.#camera.updateMatrixWorld();
     this.#cityObjects.sync(changedObjects, deltaSeconds, {
       player,
