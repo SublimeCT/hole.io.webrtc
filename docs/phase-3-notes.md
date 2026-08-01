@@ -36,6 +36,14 @@
 - lobby 连接图按本机可观测的双 DataChannel 状态显示虚线或带闪烁光晕的实线。
 - 被临时或永久封禁的 IP 可通过 `/access-status` 获取结构化 `ACCESS_BLOCKED` 响应，客户端在 WebSocket Upgrade 前显示封禁期限。
 
+## 已完成：联机视觉同步修复（纯渲染/驱动，零协议改动）
+
+三处「host 权威算了但 guest/对端没画出来」的渲染 bug，均利用 guest 已持有的确定性数据修复，未新增任何 DataChannel 协议字段：
+
+- 远端技能视觉：`HoleRenderer` 的加速拖尾/范围涟漪/引信弧+爆炸/无敌盾牌原先以 `!isPlayer` 门控只对本地玩家渲染；去掉门控后由快照同步的技能计时字段对所有玩家洞渲染，对端因此能看到完整的自爆（引信倒计时 → 引爆）。顺带移除了随之失效的 `HoleVisual.isPlayer` 与 `HoleRendererOptions.localPlayerId`。
+- guest 自己的 `+n` 弹字：`OnlineGameDriver` 不再丢弃 `object-consumed`/`player-eliminated`，转发给新增的 `Game.applyWorldEvent`；位置/分值由本地权威快照按 `objectId`/`peerId` 查表得到（`PLAYER_CAPTURE_SCORE` 已从 simulation 导出），与 host/offline 复用同一份 `#presentLocalSwallow` 呈现逻辑。
+- guest 脚印吞噬的 `4s` 缩小动画：被脚印吞噬的物体几何上位于脚印内，且其 `footprintFadeRemaining` 与脚印 `fadeRemaining` 同源同 `FOOTPRINT_MARK_SECONDS` 倒计时；guest 用导出的 `isInsideFootprint` + 同步脚印的 `fadeRemaining` 推导同一动画（host 仍直读物体自带字段，传空脚印数组保持既有行为）。
+
 ## 已知限制
 
 - v1 没有 host 迁移，host 超时直接结束房间。

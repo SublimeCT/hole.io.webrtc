@@ -2,6 +2,8 @@ import {
   FOOTPRINT_MARK_SECONDS,
   PREFAB_DEFINITIONS,
   TRAFFIC_LIGHT_PREFAB_ID,
+  isInsideFootprint,
+  type FootprintStrike,
   type HoleState,
   type PrefabDefinition,
   type WorldObjectState,
@@ -77,6 +79,12 @@ export class CityObjectRenderer {
   readonly #continuousObjectIds = new Set<string>();
   readonly #lastStatus = new Map<string, WorldObjectState["status"]>();
   readonly #lastSizeMultiplier = new Map<string, number>();
+  /**
+   * 当前帧仍在渐隐（fadeRemaining>0）的脚印。guest 用它推导被脚印吞噬物体的 4s 缩小动画——
+   * host 物体自带 footprintFadeRemaining 字段，guest 该字段缺失，改由同步脚印的 fadeRemaining（与 host 同源、
+   * 同 4s 倒计时）+ 共享几何 isInsideFootprint 确定属同一脚印，从而无协议改动地复刻同一动画。
+   */
+  #fadingFootprints: readonly FootprintStrike[] = [];
   readonly #position = new THREE.Vector3();
   readonly #quaternion = new THREE.Quaternion();
   readonly #scale = new THREE.Vector3(1, 1, 1);
@@ -213,7 +221,9 @@ export class CityObjectRenderer {
     changedObjects: readonly WorldObjectState[],
     deltaSeconds = 0,
     visibilityContext: CityVisibilityContext | null = null,
+    footprints: readonly FootprintStrike[] = [],
   ): void {
+    this.#fadingFootprints = footprints.filter((footprint) => footprint.fadeRemaining > 0);
     const touchedMeshes = new Set<THREE.InstancedMesh>();
     const objectIds = new Set<string>();
     changedObjects.forEach((object) => {
@@ -241,9 +251,10 @@ export class CityObjectRenderer {
       const previousStatus = this.#lastStatus.get(object.id);
       const sizeChanged = this.#lastSizeMultiplier.get(object.id) !== object.sizeMultiplier;
       const vehicleSinkElapsed = this.#advanceVehicleSink(object, previousStatus, deltaSeconds);
+      const footprintFade = this.#fadeRemainingFor(object);
       const needsContinuousUpdate =
         object.status === "active" ||
-        (object.footprintFadeRemaining ?? 0) > 0 ||
+        footprintFade > 0 ||
         (vehicleSinkElapsed !== null && vehicleSinkElapsed < VEHICLE_SINK_DURATION_SECONDS);
       if (needsContinuousUpdate) {
         this.#continuousObjectIds.add(object.id);
@@ -252,7 +263,6 @@ export class CityObjectRenderer {
       }
       const animated = this.#animatedModels.get(object.id);
       if (animated) {
-        const footprintFade = object.footprintFadeRemaining ?? 0;
         animated.group.visible =
           object.status !== "consumed" ||
           footprintFade > 0 ||
@@ -363,10 +373,10 @@ export class CityObjectRenderer {
         const activeModel = this.#getActiveModel(object.id, instance.batch.prefab, object);
         activeModel.visible =
           object.status !== "consumed" ||
-          (object.footprintFadeRemaining ?? 0) > 0 ||
+          footprintFade > 0 ||
           (vehicleSinkElapsed !== null && vehicleSinkElapsed < VEHICLE_SINK_DURATION_SECONDS);
         if (activeModel.visible) {
-          const fade = object.footprintFadeRemaining ?? 0;
+          const fade = footprintFade;
           if (vehicleSinkElapsed !== null) {
             this.#applyVehicleSink(activeModel, object, vehicleSinkElapsed);
           } else {
@@ -748,6 +758,24 @@ export class CityObjectRenderer {
         : 0;
     this.#vehicleSinkElapsed.set(object.id, elapsed);
     return elapsed;
+  }
+
+  /**
+   * 物体当前的脚印渐隐剩余秒数。host 直读权威字段 footprintFadeRemaining；
+   * guest 该字段缺失，回退到同步脚印的 fadeRemaining（同源同 4s 倒计时）+ 共享几何判断归属。
+   * 仅 consumed 物体可能 >0；车辆走 vehicleSink 路径，不在此处理。
+   */
+  #fadeRemainingFor(object: WorldObjectState): number {
+    if (object.status !== "consumed") return 0;
+    return object.footprintFadeRemaining ?? this.#footprintFadeFor(object) ?? 0;
+  }
+
+  /** guest 推导：物体是否落在某个仍在渐隐的脚印形状内，命中则返回该脚印的 fadeRemaining。 */
+  #footprintFadeFor(object: WorldObjectState): number | undefined {
+    for (const footprint of this.#fadingFootprints) {
+      if (isInsideFootprint(object, footprint)) return footprint.fadeRemaining;
+    }
+    return undefined;
   }
 
   #applyVehicleSink(group: THREE.Group, object: WorldObjectState, elapsed: number): void {

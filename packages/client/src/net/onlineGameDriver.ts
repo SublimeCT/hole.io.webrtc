@@ -219,9 +219,13 @@ export class OnlineGameDriver {
           this.#opts.onPoopHit(this.#matchConfig?.players.length ?? 0);
         }
         return;
-      case "match-end":
       case "object-consumed":
       case "player-eliminated":
+        // 世界状态本身已由增量快照承载；这两类离散事件只用于触发 guest 本地的 +分值 呈现
+        //（位置/分值由 Game 查本地权威快照得到，事件本身不携带可推导字段）。
+        this.#game?.applyWorldEvent(message);
+        return;
+      case "match-end":
       case "player-revived":
       case "power-up-changed":
         return; // v1：guest 的世界信息已由增量快照承载，离散事件不单独处理

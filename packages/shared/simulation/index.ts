@@ -9,6 +9,8 @@ export {
   advanceRoutedObjects,
   advanceHolePosition,
   computeHoleMoveSpeed,
+  PLAYER_CAPTURE_SCORE,
+  isInsideFootprint,
 } from "./simulation";
 export { greenAxisAt, greenTimeAccumulated, routedPositionAt } from "./trafficLights";
 export { SpatialHash } from "./spatialHash";

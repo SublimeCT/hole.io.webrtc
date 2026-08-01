@@ -42,7 +42,8 @@ import type {
 } from "./types";
 
 const MAX_OBJECT_FOOTPRINT_RADIUS = 7;
-const PLAYER_CAPTURE_SCORE = 300;
+/** 击败一名玩家固定授予胜者的分值（SPEC：玩家间吞噬固定 300 分）。供 client 渲染 +n 弹字复用。 */
+export const PLAYER_CAPTURE_SCORE = 300;
 const BOMB_SCORE_RATIO = 0.1;
 const BOMB_SCORE_CAP = 1_000;
 const BOT_ACTIVE_TARGET_TIMEOUT_SECONDS = 4;
@@ -586,7 +587,7 @@ function createFootprints(
   }));
 }
 
-function isInsideFootprint(object: WorldObjectState, footprint: FootprintStrike): boolean {
+export function isInsideFootprint(object: WorldObjectState, footprint: FootprintStrike): boolean {
   const cosine = Math.cos(-footprint.rotation);
   const sine = Math.sin(-footprint.rotation);
   const deltaX = object.position.x - footprint.position.x;

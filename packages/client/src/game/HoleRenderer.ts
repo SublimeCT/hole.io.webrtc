@@ -19,7 +19,6 @@ import * as THREE from "three";
 
 interface HoleVisual {
   id: string;
-  isPlayer: boolean;
   group: THREE.Group;
   shaft: THREE.Mesh;
   depth: THREE.Mesh;
@@ -90,14 +89,11 @@ function makeRingMaterial(color: THREE.Color, opacity: number): THREE.MeshBasicM
 export interface HoleRendererOptions {
   /** 每个 hole（peerId / "player" / "bot-x"）对应的圆环颜色 #RRGGBB。 */
   readonly colors: ReadonlyMap<string, THREE.ColorRepresentation>;
-  /** 本地玩家的 hole id，用于渲染本地专属视觉（加速拖尾/涟漪/引信/无敌盾牌）。 */
-  readonly localPlayerId: string;
 }
 
 export class HoleRenderer {
   readonly #scene: THREE.Scene;
   readonly #colors: ReadonlyMap<string, THREE.ColorRepresentation>;
-  readonly #localPlayerId: string;
   readonly #visuals = new Map<string, HoleVisual>();
   readonly #geometries = new Set<THREE.BufferGeometry>();
   readonly #materials = new Set<THREE.Material>();
@@ -108,7 +104,6 @@ export class HoleRenderer {
   constructor(scene: THREE.Scene, options: HoleRendererOptions) {
     this.#scene = scene;
     this.#colors = options.colors;
-    this.#localPlayerId = options.localPlayerId;
     this.#shieldTexture = this.#createEmojiTexture("🛡️");
     this.#crownTexture = this.#createEmojiTexture("👑");
   }
@@ -145,7 +140,6 @@ export class HoleRenderer {
   #createHoleVisual(hole: HoleState): HoleVisual {
     const group = new THREE.Group();
     const color = resolveColor(hole, this.#colors);
-    const isPlayer = hole.id === this.#localPlayerId;
 
     // stencil 切洞（地面开孔）。
     const maskGeometry = new THREE.CircleGeometry(1, RING_SEGMENTS);
@@ -238,7 +232,7 @@ export class HoleRenderer {
     levelFlash.visible = false;
     group.add(levelFlash);
 
-    // 05 Q 加速拖尾（玩家专用，沿移动反方向扇形排布）。
+    // 05 Q 加速拖尾（沿移动反方向扇形排布，对所有洞渲染）。
     const speedGroup = new THREE.Group();
     speedGroup.visible = false;
     const streakMaterials: THREE.MeshBasicMaterial[] = [];
@@ -263,7 +257,7 @@ export class HoleRenderer {
     }
     group.add(speedGroup);
 
-    // 06 E 范围涟漪（玩家专用，两道扩散环）。
+    // 06 E 范围涟漪（两道扩散环，对所有洞渲染）。
     const ripples: THREE.Mesh[] = [];
     const rippleMaterials: THREE.MeshBasicMaterial[] = [];
     for (let i = 0; i < RIPPLE_COUNT; i += 1) {
@@ -393,7 +387,7 @@ export class HoleRenderer {
     coreGlow.visible = false;
     group.add(coreGlow);
 
-    // 08 无敌盾牌（玩家专用，沿洞缘轨道公转）。
+    // 08 无敌盾牌（沿洞缘轨道公转，对所有洞渲染）。
     const shield = this.#createSprite(this.#shieldTexture);
     shield.visible = false;
     group.add(shield);
@@ -435,7 +429,6 @@ export class HoleRenderer {
     const progress = getHoleProgress(hole.score);
     return {
       id: hole.id,
-      isPlayer,
       group,
       shaft,
       depth,
@@ -558,7 +551,8 @@ export class HoleRenderer {
   }
 
   #syncSpeed(visual: HoleVisual, hole: HoleState, elapsed: number): void {
-    if (!visual.isPlayer || hole.speedBoostRemaining <= 0) {
+    // 联机下对端玩家的加速态也由快照同步，拖尾对所有洞渲染。
+    if (hole.speedBoostRemaining <= 0) {
       visual.speedGroup.visible = false;
       return;
     }
@@ -589,7 +583,8 @@ export class HoleRenderer {
   }
 
   #syncRange(visual: HoleVisual, hole: HoleState, elapsed: number): void {
-    if (!visual.isPlayer || hole.radiusBoostRemaining <= 0) {
+    // 联机下对端玩家的范围态也由快照同步，涟漪对所有洞渲染。
+    if (hole.radiusBoostRemaining <= 0) {
       visual.ripples.forEach((ripple) => {
         ripple.visible = false;
       });
@@ -610,7 +605,9 @@ export class HoleRenderer {
 
   #syncBomb(visual: HoleVisual, hole: HoleState, elapsed: number, deltaSeconds: number): void {
     const fuse = hole.bombFuseRemaining;
-    if (!visual.isPlayer || fuse <= 0) {
+    // 联机下对端玩家的引信也由快照同步，引信弧/范围环/爆炸对所有洞渲染，
+    // 远端因此能看到完整的自爆（引信倒计时 → 引爆帧爆炸），不再凭空爆炸。
+    if (fuse <= 0) {
       visual.bombMesh.visible = false;
       visual.fuseGlow.visible = false;
       visual.bombRange.visible = false;
@@ -687,7 +684,8 @@ export class HoleRenderer {
   }
 
   #syncShield(visual: HoleVisual, hole: HoleState, elapsed: number): void {
-    if (!visual.isPlayer || hole.invulnerabilityRemaining <= 0) {
+    // 联机下对端玩家的无敌也由快照同步，盾牌对所有洞渲染。
+    if (hole.invulnerabilityRemaining <= 0) {
       visual.shield.visible = false;
       return;
     }

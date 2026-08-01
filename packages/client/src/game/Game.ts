@@ -1,6 +1,7 @@
 import {
   BOMB_COOLDOWN_SECONDS,
   INITIAL_HOLE_RADIUS,
+  PLAYER_CAPTURE_SCORE,
   MAP_HALF_HEIGHT,
   MAP_HALF_WIDTH,
   MAP_HEIGHT,
@@ -18,6 +19,7 @@ import {
   routedPositionAt,
   stepSimulation,
   type AbilityId,
+  type FootprintStrike,
   type HoleState,
   type PlayerInput,
   type PowerUpType,
@@ -60,6 +62,8 @@ const MAX_STEPS_PER_FRAME = 5;
 /** guest 模式把本地输入上报给 host 的目标频率（~30Hz）。 */
 const INPUT_SEND_INTERVAL_SECONDS = 1 / 30;
 const MAX_RENDER_PIXEL_RATIO = 1.5;
+/** host/offline 传给 CityObjectRenderer 的占位空脚印列表（这两端物体自带 footprintFadeRemaining 字段）。 */
+const EMPTY_FOOTPRINTS: readonly FootprintStrike[] = Object.freeze([]);
 
 export type GameMode = "offline" | "host" | "guest";
 
@@ -285,7 +289,6 @@ export class Game {
     this.#cityObjects = new CityObjectRenderer(this.#scene);
     this.#holeRenderer = new HoleRenderer(this.#scene, {
       colors: config.playerColors,
-      localPlayerId: config.localPlayerId,
     });
     this.#powerUpRenderer = new PowerUpRenderer(this.#scene, ui.powerUpLayer);
     this.#trafficLights = new TrafficLightRenderer(this.#scene, config.initialState.objects);
@@ -870,10 +873,13 @@ export class Game {
     this.#holeRenderer.sync(holes, this.#state.elapsed, deltaSeconds, this.#leaderId);
     const changedObjects = this.#takeChangedObjectsForRender();
     this.#trafficLights.sync(changedObjects, renderElapsed);
+    // guest 的被脚印吞噬物体没有 footprintFadeRemaining 字段，改由同步脚印推导 4s 渐隐；
+    // host/offline 物体自带该字段，传空数组以完全保持既有行为。
+    const fadeFootprints = this.#mode === "guest" ? this.#state.footprints : EMPTY_FOOTPRINTS;
 
     const player = holes.find((hole) => hole.id === this.#localPlayerId);
     if (!player) {
-      this.#cityObjects.sync(changedObjects, deltaSeconds);
+      this.#cityObjects.sync(changedObjects, deltaSeconds, null, fadeFootprints);
       this.#fullObjectSyncPending = false;
       return;
     }
@@ -907,10 +913,15 @@ export class Game {
       .sub(this.#cameraDesired);
     this.#camera.lookAt(this.#cameraLookAt);
     this.#camera.updateMatrixWorld();
-    this.#cityObjects.sync(changedObjects, deltaSeconds, {
-      player,
-      cameraPosition: this.#camera.position,
-    });
+    this.#cityObjects.sync(
+      changedObjects,
+      deltaSeconds,
+      {
+        player,
+        cameraPosition: this.#camera.position,
+      },
+      fadeFootprints,
+    );
     this.#fullObjectSyncPending = false;
     this.#powerUpRenderer.sync(
       this.#state.powerUps,
@@ -1187,18 +1198,49 @@ export class Game {
     if (event.holeId !== this.#localPlayerId) {
       return;
     }
+    this.#presentLocalSwallow(event.position, event.value, event.type === "player-defeated");
+  }
+
+  /**
+   * 本地玩家吞噬物体/击败玩家时的瞬时反馈：累计本局吞噬数、播放吞噬音效/震动，
+   * 并在物体位置弹出 `+分值` 浮字（击杀转警示色）。host/offline 由 {@link #handleEvent} 触发，
+   * guest 由 {@link applyWorldEvent} 触发——三端复用同一份呈现逻辑。
+   */
+  #presentLocalSwallow(position: Vector2, value: number, isKill: boolean): void {
     this.#playerSwallowCount += 1;
     this.#feedback.swallow();
-    this.#scoreWorldPosition.set(event.position.x, 0.5, event.position.y).project(this.#camera);
+    this.#scoreWorldPosition.set(position.x, 0.5, position.y).project(this.#camera);
     const popup = document.createElement("span");
-    popup.className = `score-pop${event.type === "player-defeated" ? " is-kill" : ""}`;
-    popup.textContent = `+${event.value}`;
+    popup.className = `score-pop${isKill ? " is-kill" : ""}`;
+    popup.textContent = `+${value}`;
     // 容器是全屏 position:fixed，NDC→screen 用缓存的视口尺寸换算；
     // 不在吞噬热路径里读 clientWidth/getBoundingClientRect，否则连续 appendChild+读尺寸会触发强制布局（reflow）。
     popup.style.left = `${((this.#scoreWorldPosition.x + 1) / 2) * this.#viewportWidth}px`;
     popup.style.top = `${((-this.#scoreWorldPosition.y + 1) / 2) * this.#viewportHeight}px`;
     popup.addEventListener("animationend", () => popup.remove(), { once: true });
     this.#ui.scoreEffects.appendChild(popup);
+  }
+
+  /**
+   * guest：处理 host 经 reliable channel 广播的离散世界事件，复刻 host/offline 的本地 `+分值` 呈现。
+   * guest 不运行模拟循环，吞噬事件只能由 host 广播触发；位置/分值用本地权威快照查表得到，
+   * 不依赖事件携带这些可由接收端推导的字段（AGENTS.md §0.1 + webrtc skill 检查单第 5 条）。
+   * 只呈现本地玩家自己 credited 的吞噬，与 host/offline 行为一致。
+   */
+  applyWorldEvent(event: WorldEvent): void {
+    if (event.type === "object-consumed") {
+      if (!event.creditedPeerIds.includes(this.#localPlayerId)) return;
+      const object = this.#state.objects.find((candidate) => candidate.id === event.objectId);
+      if (object === undefined) return;
+      this.#presentLocalSwallow(object.position, object.value, false);
+      return;
+    }
+    if (event.type === "player-eliminated") {
+      if (event.creditedPeerId !== this.#localPlayerId) return;
+      const hole = this.#state.holes.find((candidate) => candidate.id === event.peerId);
+      if (hole === undefined) return;
+      this.#presentLocalSwallow(hole.position, PLAYER_CAPTURE_SCORE, true);
+    }
   }
 
   #createMatchResult(): MatchResult {
