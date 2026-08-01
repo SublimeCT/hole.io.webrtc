@@ -13,7 +13,7 @@ Hole City 是一个 Hole.io 风格的 Web 3D 城市吞噬游戏。当前仓库�
 
 项目采用 pnpm workspace，游戏模拟、客户端渲染和后续联机协议分层维护。当前版本处于 Phase 1：单机核心玩法已经可运行，联机服务仍在开发中。
 
-![Hole City 首页截图](./docs/screenshots/home-1080p.png)
+![Hole City 首页截图](./docs/screenshots/game-1080p.png)
 
 ## 当前状态
 
@@ -86,6 +86,10 @@ GitHub Pages 只托管静态客户端。正式站与 GitHub Pages 镜像均使�
 地图当前为 `169m × 220m` 城市，4 条纵向道路和 5 条横向道路形成 `3 × 4` 个净宽 `41m` 的大街区。五类街区每块固定使用 6 种建筑并优先高层，运行时使用 24 种建筑模型；建筑之间保留 `0.2m` 间隙。场景共 `695` 个物体：157 栋建筑、44 辆车辆、155 名行人（11 名移动）和 339 个三档分值小物体（`+4 × 150`、`+12 × 142`、`+25 × 47`）。初始布局、车辆路线和吞噬中的活跃刚体均禁止重叠与穿模。
 
 客户端分为首页 `#/`、游戏页 `#/game` 和静态结算页 `#/results`。Three.js、物理和 GLB 模型只在进入游戏页后懒加载；静态模型继续按 prefab 实例化，模型加载限制为 4 路并发，渲染像素比上限为 `1.25`。
+
+## 后端部署
+
+后端配置比较麻烦, 后端通过 `Github Actions` 进行构建和部署, 详见 `.github/.github/workflows/release-artifact.yml`, 后端服务部署需要配置 `ssh key`, 并在服务器端创建用户和配置文件, 并通过 `coturn` 对外提供 `webrtc` 打洞失败时需要的 `TURN` 中继服务(如果需要的话), 详见服务器配置文档: [deploy.md](./docs/deploy.md)
 
 ## 操作
 
@@ -162,9 +166,6 @@ docs/        Phase 笔记和素材清单
 - [`docs/phase-1-notes.md`](./docs/phase-1-notes.md)：Phase 1 实现记录和已知问题。
 - [`docs/asset-inventory.md`](./docs/asset-inventory.md)：本地模型清单和素材许可。
 
-## 已知限制
+## 友情链接
 
-- 地图仍由共享模块中的程序化布局代码生成，地图编辑器尚未接入。
-- 完整 WebRTC 对局、TURN、存档和数据库不属于当前默认可玩流程。
-- Host 权威的联机架构存在结构性信任限制，详见 `AGENTS.md` 第 8 节。
-- 移动端专项性能和触控体验优化仍属于后续阶段。
+- [LINUX DO](https://linux.do/)
