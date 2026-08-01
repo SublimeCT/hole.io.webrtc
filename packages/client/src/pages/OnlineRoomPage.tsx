@@ -20,6 +20,8 @@ import {
   persistPreferences,
   RENDER_FRAME_RATES,
   type RenderFrameRate,
+  SNAPSHOT_FREQUENCIES,
+  type SnapshotFrequency,
 } from "../app/preferences";
 import { clearRoomRole, readRoomRole } from "../app/roomRole";
 import { createPlayerProfile } from "../net/multiplayerSession";
@@ -172,6 +174,9 @@ export function OnlineRoomPage() {
   const [draftRenderFrameRate, setDraftRenderFrameRate] = useState<RenderFrameRate>(
     preferences.renderFrameRate,
   );
+  const [draftSnapshotFrequency, setDraftSnapshotFrequency] = useState<SnapshotFrequency>(
+    preferences.snapshotFrequency,
+  );
   const [toast, setToast] = useState("");
   const [qrDataUrl, setQrDataUrl] = useState("");
   const nameInput = useRef<HTMLInputElement>(null);
@@ -283,7 +288,8 @@ export function OnlineRoomPage() {
     if (!settingsOpen) return;
     nameInput.current?.focus();
     setDraftRenderFrameRate(preferences.renderFrameRate);
-  }, [settingsOpen, preferences.renderFrameRate]);
+    setDraftSnapshotFrequency(preferences.snapshotFrequency);
+  }, [settingsOpen, preferences.renderFrameRate, preferences.snapshotFrequency]);
 
   useEffect(() => {
     if (!connectionError) return;
@@ -441,6 +447,7 @@ export function OnlineRoomPage() {
       playerName: name,
       playerRingColor: draftColor,
       renderFrameRate: draftRenderFrameRate,
+      snapshotFrequency: draftSnapshotFrequency,
     };
     const profile = createPlayerProfile({
       playerName: name,
@@ -814,6 +821,28 @@ export function OnlineRoomPage() {
                 ))}
               </div>
             </div>
+            {localPeer?.isHost ? (
+              <div className="online-segment-group">
+                <span>同步频率（房主）</span>
+                <div className="online-segmented">
+                  {SNAPSHOT_FREQUENCIES.map((frequency) => (
+                    <label
+                      key={frequency}
+                      className={`online-segment ${draftSnapshotFrequency === frequency ? "is-on" : ""}`}
+                    >
+                      <input
+                        type="radio"
+                        name="online-snapshot-frequency"
+                        value={frequency}
+                        checked={draftSnapshotFrequency === frequency}
+                        onChange={() => setDraftSnapshotFrequency(frequency)}
+                      />
+                      <span>{frequency} Hz</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            ) : null}
             <div className="online-modal-actions">
               <button
                 type="button"

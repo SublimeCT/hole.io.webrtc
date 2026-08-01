@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useNavigate } from "react-router-dom";
 import { useStore } from "zustand";
 
@@ -59,10 +59,17 @@ export function ResultsPage() {
   const language = loadPreferences().language;
   const localeNumber = new Intl.NumberFormat(language);
   const result = useMemo(() => loadMatchResult() ?? EMPTY_RESULT, []);
-  const { session } = useMultiplayer();
+  const { session, disposeSession } = useMultiplayer();
   const room = useStore(multiplayerStore, (state) => state.room);
   const isOnline = session !== null && room !== null;
   const [countdown, setCountdown] = useState(ONLINE_RETURN_SECONDS);
+
+  // 联机结算页「返回主页」= 离开房间：必须销毁会话（发 leave-room、关 WS/DataChannel/RTCPeerConnection），
+  // 否则 MultiplayerProvider 包裹所有路由，会话会半死残留、host 仍显示与本机连接。
+  const returnHome = useCallback((): void => {
+    if (isOnline) disposeSession();
+    navigate("/", { replace: true });
+  }, [disposeSession, isOnline, navigate]);
 
   const playerEntry = result.ranking.find((entry) => entry.isPlayer);
   const isOut = playerEntry?.isOut === true;
@@ -94,12 +101,12 @@ export function ResultsPage() {
         navigate("/game", { replace: true });
       } else if (event.code === "Escape") {
         event.preventDefault();
-        navigate("/");
+        returnHome();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [navigate, isOnline]);
+  }, [returnHome, isOnline]);
 
   return (
     <main className={`results ${isOut ? "is-out" : "is-win"}`}>
@@ -289,11 +296,7 @@ export function ResultsPage() {
               <span className="results-btn-key">R</span>
             </button>
           )}
-          <button
-            className="results-btn"
-            type="button"
-            onClick={() => navigate("/", { replace: true })}
-          >
+          <button className="results-btn" type="button" onClick={returnHome}>
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M3 11l9-8 9 8M5 10v10h14V10" />
             </svg>

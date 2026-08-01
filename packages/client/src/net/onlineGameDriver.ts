@@ -1,5 +1,5 @@
 // 联机对局驱动：把 WebRTC DataChannel（经 MultiplayerSession）与 Game 桥接。
-// host：发 match-start、建 host 权威 Game、~10Hz 广播增量快照、reliable 广播 WorldEvent、
+// host：发 match-start、建 host 权威 Game、30Hz 广播增量快照、reliable 广播 WorldEvent、
 //       收 guest InputPacket 喂循环、响应 resync 发分块 checkpoint。
 // guest：收 match-start 建 guest Game、~30Hz 上报 InputPacket、收增量快照 applyDelta、
 //        revision 不连续时发 resync-request、收 checkpoint 分块原子恢复。
@@ -33,7 +33,6 @@ import { multiplayerStore } from "../store/multiplayerStore";
 import { decodeGameData, encodeGameData, type GameDataMessage } from "./dataChannel";
 import type { GameChannelKind } from "./starConnection";
 import type { MultiplayerSession } from "./multiplayerSession";
-import { SnapshotInterpolator } from "./snapshotInterp";
 
 const MAP_SEED = 0x5eed1234;
 const MATCH_DURATION_SECONDS = 180;
@@ -56,12 +55,11 @@ interface MatchConfig {
 export class OnlineGameDriver {
   readonly #opts: OnlineGameDriverOptions;
   #game: Game | null = null;
-  readonly #interp = new SnapshotInterpolator();
+  #lastSnapshotSeq = -1;
   #matchConfig: MatchConfig | null = null;
   #initialState: SimulationState | null = null;
   readonly #checkpointPending = new Map<string, readonly CheckpointChunk[]>();
   #disposed = false;
-  #inputSeq = 0;
   #resyncInFlight = false;
 
   constructor(opts: OnlineGameDriverOptions) {
@@ -162,7 +160,7 @@ export class OnlineGameDriver {
           : undefined,
       onSendLocalInput:
         mode === "guest"
-          ? (direction, abilities) => this.#sendInput(direction, abilities)
+          ? (seq, direction, abilities) => this.#sendInput(seq, direction, abilities)
           : undefined,
     };
     const game = await Game.createOnline(config);
@@ -242,13 +240,14 @@ export class OnlineGameDriver {
   #onDelta(delta: StateDeltaSnapshot): void {
     const game = this.#game;
     if (game === null) return;
-    const latest = this.#interp.push(delta);
-    if (latest === null) return;
-    if (latest.baseWorldRevision !== game.localWorldRevision) {
-      this.#requestResync(game.localWorldRevision, latest);
+    // 旧/重复/乱序快照直接丢弃（位置插值由 Game 内 SnapshotInterpolator 承担）。
+    if (delta.snapshotSeq <= this.#lastSnapshotSeq) return;
+    this.#lastSnapshotSeq = delta.snapshotSeq;
+    if (delta.baseWorldRevision !== game.localWorldRevision) {
+      this.#requestResync(game.localWorldRevision, delta);
       return;
     }
-    game.applyDelta(latest);
+    game.applyDelta(delta);
   }
 
   #requestResync(localRevision: number, delta: StateDeltaSnapshot): void {
@@ -264,13 +263,12 @@ export class OnlineGameDriver {
     this.#sendToAllPeers("reliable", request);
   }
 
-  #sendInput(direction: Vector2, abilities: readonly AbilityId[]): void {
+  #sendInput(seq: number, direction: Vector2, abilities: readonly AbilityId[]): void {
     if (this.#matchConfig === null) return;
-    this.#inputSeq += 1;
     const packet: InputPacket = {
       type: "input",
       matchId: this.#matchConfig.matchId,
-      seq: this.#inputSeq,
+      seq,
       direction,
       clientTime: Date.now(),
       abilities,
@@ -309,7 +307,6 @@ export class OnlineGameDriver {
     if (complete === null) return;
     this.#checkpointPending.delete(complete.checkpointId);
     this.#resyncInFlight = false;
-    this.#interp.reset();
     this.#game?.applyCheckpoint(complete);
   }
 

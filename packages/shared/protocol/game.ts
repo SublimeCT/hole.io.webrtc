@@ -71,8 +71,9 @@ export type ObjectStateOverride =
     };
 
 /**
- * host → guest，约 10Hz，走 unordered/unreliable channel。
+ * host → guest，30Hz，走 unordered/unreliable channel。
  * 快照自身允许丢失；只有 baseWorldRevision 与接收端 revision 不匹配时才需要可靠重同步。
+ * guest 渲染时对位置/半径在相邻快照间线性插值（恒定滞后 ~100ms）以平滑 30Hz 跳变。
  */
 export interface StateDeltaSnapshot {
   type: "state-delta";

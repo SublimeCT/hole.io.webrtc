@@ -315,6 +315,7 @@ export function HomePage() {
       playerRingColor: draftColor,
       language: draftLanguage,
       renderFrameRate: draftRenderFrameRate,
+      snapshotFrequency: preferences.snapshotFrequency,
     };
     setPreferences(nextPreferences);
     persistPreferences(nextPreferences);

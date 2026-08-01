@@ -48,15 +48,15 @@ import { CityObjectRenderer } from "./CityObjectRenderer";
 import { Feedback } from "./Feedback";
 import { HoleRenderer } from "./HoleRenderer";
 import { InputController } from "./InputController";
+import { LocalHolePredictor } from "./localHolePredictor";
 import { PowerUpRenderer } from "./PowerUpRenderer";
+import { SnapshotInterpolator } from "./snapshotInterp";
 import { TrafficLightRenderer } from "./TrafficLightRenderer";
 
 const FIXED_STEP_SECONDS = 1 / 60;
 /** 单帧最多追赶的模拟步数上限。卡顿（GC/标签页切换/上下文丢失恢复）后只补有限步、丢弃其余积压，
  *  避免"一步慢→多步补→更慢"的螺旋卡死；正常 60Hz 帧只跑 1 步，行为无变化。 */
 const MAX_STEPS_PER_FRAME = 5;
-/** host 广播增量快照的目标频率（30Hz），#frame 内累加时间触发。 */
-const SNAPSHOT_INTERVAL_SECONDS = 1 / 30;
 /** guest 模式把本地输入上报给 host 的目标频率（~30Hz）。 */
 const INPUT_SEND_INTERVAL_SECONDS = 1 / 30;
 const MAX_RENDER_PIXEL_RATIO = 1.5;
@@ -90,8 +90,10 @@ export interface GameConfig {
   onBroadcastSnapshot?: ((delta: StateDeltaSnapshot) => void) | undefined;
   /** host 模式：每步产出已转换的可靠 WorldEvent（driver 直接 reliable 广播）。 */
   onWorldEvents?: ((events: readonly WorldEvent[]) => void) | undefined;
-  /** guest 模式：~30Hz 把本地归一化输入 + 技能意图上报给 host。 */
-  onSendLocalInput?: ((direction: Vector2, abilities: readonly AbilityId[]) => void) | undefined;
+  /** guest 模式：~30Hz 把本地归一化输入 + 技能意图上报给 host。seq 由 Game 生成，驱动客户端预测和解。 */
+  onSendLocalInput?:
+    | ((seq: number, direction: Vector2, abilities: readonly AbilityId[]) => void)
+    | undefined;
 }
 
 export interface GameUi {
@@ -176,7 +178,7 @@ export class Game {
   readonly #onBroadcastSnapshot: ((delta: StateDeltaSnapshot) => void) | undefined;
   readonly #onWorldEvents: ((events: readonly WorldEvent[]) => void) | undefined;
   readonly #onSendLocalInput:
-    | ((direction: Vector2, abilities: readonly AbilityId[]) => void)
+    | ((seq: number, direction: Vector2, abilities: readonly AbilityId[]) => void)
     | undefined;
   // host 权威广播状态
   #snapshotSeq = 0;
@@ -209,6 +211,16 @@ export class Game {
   #guestElapsedTo = 0;
   #guestElapsedStartedAt = 0;
   #guestElapsedDuration = 0;
+  /** guest：快照位置插值器（host 仍权威，仅平滑渲染）。offline/host 不使用。 */
+  readonly #interp = new SnapshotInterpolator();
+  /** guest 渲染用的 holes：position/radius 已插值，其余字段取最新快照。非 guest 渲染为 null。 */
+  #renderHoles: readonly HoleState[] | null = null;
+  /** 上次 #buildRenderHoles 的墙钟，用于算插值时钟的 dt（0 表示待初始化）。 */
+  #interpLastSampleTime = 0;
+  /** guest：本地玩家洞的客户端预测（跟手），快照到达时和解；offline/host 不使用。 */
+  readonly #predictor = new LocalHolePredictor();
+  /** guest：本地输入序号，随每次上报递增；host 回传 lastProcessedInputSeq 供预测和解。 */
+  #inputSeq = 0;
   /** 当前领先者 hole id（12.5Hz HUD 内更新），渲染帧直接读，避免每帧重排 holes。 */
   #leaderId: string | undefined;
   #resizePending = false;
@@ -218,6 +230,8 @@ export class Game {
   #viewportHeight = 0;
   readonly #preferences: GamePreferences;
   readonly #renderIntervalMilliseconds: number;
+  /** host：增量快照广播间隔（秒），由 host 的「同步频率」偏好决定；guest/offline 不使用。 */
+  readonly #snapshotIntervalSeconds: number;
   readonly #onMatchEnd: (result: MatchResult) => void;
   readonly #onPoopHit: (playerCount: number) => void;
   readonly #pendingAbilities = new Set<AbilityId>();
@@ -235,6 +249,7 @@ export class Game {
     this.#ui = ui;
     this.#preferences = preferences;
     this.#renderIntervalMilliseconds = 1_000 / preferences.renderFrameRate;
+    this.#snapshotIntervalSeconds = 1 / preferences.snapshotFrequency;
     this.#onMatchEnd = config.onMatchEnd;
     this.#onPoopHit = config.onPoopHit;
     this.#state = config.initialState;
@@ -430,7 +445,7 @@ export class Game {
       }
       if (this.#mode === "host" && this.#matchStarted) {
         this.#snapshotAccumulator += frameSeconds;
-        if (this.#snapshotAccumulator >= SNAPSHOT_INTERVAL_SECONDS) {
+        if (this.#snapshotAccumulator >= this.#snapshotIntervalSeconds) {
           this.#snapshotAccumulator = 0;
           this.#broadcastSnapshot();
         }
@@ -448,7 +463,10 @@ export class Game {
     if (renderDue) {
       const renderElapsed =
         this.#mode === "guest" ? this.#sampleGuestElapsed(time) : this.#state.elapsed;
-      if (this.#mode === "guest") this.#syncGuestRoutedObjects(renderElapsed);
+      if (this.#mode === "guest") {
+        this.#syncGuestRoutedObjects(renderElapsed);
+        this.#buildRenderHoles(time);
+      }
       if (this.#matchStarted || this.#forceRender) {
         this.#syncScene(this.#renderDeltaAccumulator, renderElapsed);
       }
@@ -532,15 +550,18 @@ export class Game {
     }
   }
 
-  /** guest：把本地归一化输入 + 技能意图上报给 host（driver 包装成 InputPacket）。 */
+  /** guest：把本地归一化输入 + 技能意图上报给 host（driver 包装成 InputPacket）。seq 在此生成并记入预测器。 */
   #emitLocalInput(): void {
     if (this.#onSendLocalInput === undefined) return;
+    this.#inputSeq += 1;
+    const direction = this.#input.getDirection();
     const abilities = [...this.#pendingAbilities];
     this.#pendingAbilities.clear();
-    this.#onSendLocalInput(this.#input.getDirection(), abilities);
+    this.#onSendLocalInput(this.#inputSeq, direction, abilities);
+    this.#predictor.recordInput(this.#inputSeq, direction, performance.now());
   }
 
-  /** host：把当前权威状态编码成增量快照，~10Hz 广播给所有 guest。 */
+  /** host：把当前权威状态编码成增量快照，30Hz 广播给所有 guest（guest 渲染时再插值平滑）。 */
   #broadcastSnapshot(): void {
     if (this.#onBroadcastSnapshot === undefined || this.#matchId === null) return;
     const delta = stateToDeltaSnapshot({
@@ -587,6 +608,8 @@ export class Game {
     const now = performance.now();
     const renderedElapsed = this.#sampleGuestElapsed(now);
     this.#state = applyDeltaToState(this.#state, delta);
+    this.#interp.push(delta);
+    this.#reconcileLocalPrediction(delta, now);
     this.#guestElapsedFrom = renderedElapsed;
     this.#guestElapsedTo = delta.elapsed;
     this.#guestElapsedStartedAt = now;
@@ -595,9 +618,30 @@ export class Game {
     this.#worldRevision = delta.worldRevision;
   }
 
+  /** guest：用快照里本地玩家的权威位置 + lastProcessedInputSeq 和解预测（回放未确认输入，避免回弹）。 */
+  #reconcileLocalPrediction(delta: StateDeltaSnapshot, now: number): void {
+    const localSnapshot = delta.players.find((player) => player.peerId === this.#localPlayerId);
+    if (localSnapshot === undefined) return;
+    const localHole = this.#state.holes.find((hole) => hole.id === this.#localPlayerId);
+    if (localHole === undefined) return;
+    if (this.#predictor.position === null) this.#predictor.reset(localSnapshot.position);
+    else
+      this.#predictor.reconcile(
+        localSnapshot.position,
+        localSnapshot.lastProcessedInputSeq,
+        localHole,
+        now,
+      );
+  }
+
   /** guest：driver 收到可靠 checkpoint 后重建可观察世界。 */
   applyCheckpoint(checkpoint: FullStateCheckpoint): void {
     this.#state = applyCheckpointToState(this.#state, checkpoint);
+    this.#interp.reset();
+    this.#renderHoles = null;
+    this.#interpLastSampleTime = 0;
+    const localHole = this.#state.holes.find((hole) => hole.id === this.#localPlayerId);
+    if (localHole !== undefined) this.#predictor.reset(localHole.position);
     this.#guestElapsedFrom = checkpoint.elapsed;
     this.#guestElapsedTo = checkpoint.elapsed;
     this.#guestElapsedDuration = 0;
@@ -793,12 +837,41 @@ export class Game {
     this.#scene.add(mesh);
   }
 
+  /** guest：构造渲染用 holes——本地玩家用客户端预测位置（跟手），其余用快照插值（顺滑）。
+   *  插值缓冲不足（首帧 / checkpoint 后）时非本地洞回退到最新快照。 */
+  #buildRenderHoles(time: number): void {
+    const last = this.#interpLastSampleTime;
+    const dtMs = last === 0 ? 0 : Math.min(100, time - last);
+    this.#interpLastSampleTime = time;
+    const samples = this.#interp.sample(dtMs);
+
+    // 本地洞：用当前输入即时推进预测位置（速度因素取自最新权威快照）。
+    const localHole = this.#state.holes.find((hole) => hole.id === this.#localPlayerId);
+    if (this.#predictor.position !== null && localHole !== undefined) {
+      this.#predictor.advance(this.#input.getDirection(), dtMs / 1000, localHole);
+    }
+
+    this.#renderHoles = this.#state.holes.map((hole) => {
+      if (hole.id === this.#localPlayerId && this.#predictor.position !== null) {
+        return {
+          ...hole,
+          position: { x: this.#predictor.position.x, y: this.#predictor.position.y },
+        };
+      }
+      if (samples === null) return hole;
+      const sampled = samples.get(hole.id);
+      if (sampled === undefined) return hole;
+      return { ...hole, position: { x: sampled.x, y: sampled.y }, radius: sampled.radius };
+    });
+  }
+
   #syncScene(deltaSeconds: number, renderElapsed = this.#state.elapsed): void {
-    this.#holeRenderer.sync(this.#state.holes, this.#state.elapsed, deltaSeconds, this.#leaderId);
+    const holes = this.#renderHoles ?? this.#state.holes;
+    this.#holeRenderer.sync(holes, this.#state.elapsed, deltaSeconds, this.#leaderId);
     const changedObjects = this.#takeChangedObjectsForRender();
     this.#trafficLights.sync(changedObjects, renderElapsed);
 
-    const player = this.#state.holes.find((hole) => hole.id === this.#localPlayerId);
+    const player = holes.find((hole) => hole.id === this.#localPlayerId);
     if (!player) {
       this.#cityObjects.sync(changedObjects, deltaSeconds);
       this.#fullObjectSyncPending = false;
@@ -843,7 +916,7 @@ export class Game {
       this.#state.powerUps,
       this.#state.footprints,
       this.#state.poopHazards,
-      this.#state.holes,
+      holes,
       this.#camera,
       this.#viewportWidth,
       this.#viewportHeight,
@@ -899,7 +972,9 @@ export class Game {
     // 同时覆盖单机（对手是 bot）与联机（对手是真人）：联机不生成 bot、单机无其他真人，
     // 故只按 id 排除本地玩家即可；出局/淘汰的由下方 per-slot hidden 处理。
     // 历史上这里曾是 kind === "bot"，后被改成 kind === "human" 导致单机方向标记全部消失。
-    const opponents = this.#state.holes.filter((hole) => hole.id !== this.#localPlayerId);
+    const opponents = (this.#renderHoles ?? this.#state.holes).filter(
+      (hole) => hole.id !== this.#localPlayerId,
+    );
     const width = this.#viewportWidth;
     const height = this.#viewportHeight;
     const centerX = width / 2;

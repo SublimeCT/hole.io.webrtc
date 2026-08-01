@@ -259,24 +259,37 @@ function decideBotInput(
   return { bot, direction, rngState: nextRngState, releasedObjectId };
 }
 
-function moveHole(hole: HoleState, direction: Vector2, deltaSeconds: number): HoleState {
-  const normalized = normalize(direction);
-  const limitX = Math.max(0, MAP_HALF_WIDTH - hole.radius);
-  const limitY = Math.max(0, MAP_HALF_HEIGHT - hole.radius);
+/** 玩家洞当前移动速度（m/s）：基础 + 等级加成 + 加速技能 ×2 + 啤酒 ×0.5。
+ *  纯函数，host 权威模拟与 guest 客户端预测共用，保证两端速度公式完全一致（AGENTS.md §0.2 单一真源）。 */
+export function computeHoleMoveSpeed(hole: HoleState): number {
   const levelSpeed = BASE_MOVE_SPEED + getHoleProgress(hole.score).level * MOVE_SPEED_PER_LEVEL;
   const boostMultiplier = hole.speedBoostRemaining > 0 ? 2 : 1;
   const beerMultiplier = hole.activePowerUps.some((effect) => effect.type === "beer") ? 0.5 : 1;
-  const moveSpeed =
+  return (
     (hole.kind === "bot" ? levelSpeed * BOT_SPEED_MULTIPLIER : levelSpeed) *
     boostMultiplier *
-    beerMultiplier;
+    beerMultiplier
+  );
+}
+
+/** 按方向与 dt 推进洞位置（含地图边界 clamp），返回新位置。host 权威模拟与 guest 预测共用同一函数。 */
+export function advanceHolePosition(
+  hole: HoleState,
+  direction: Vector2,
+  deltaSeconds: number,
+): Vector2 {
+  const normalized = normalize(direction);
+  const limitX = Math.max(0, MAP_HALF_WIDTH - hole.radius);
+  const limitY = Math.max(0, MAP_HALF_HEIGHT - hole.radius);
+  const moveSpeed = computeHoleMoveSpeed(hole);
   return {
-    ...hole,
-    position: {
-      x: clamp(hole.position.x + normalized.x * moveSpeed * deltaSeconds, -limitX, limitX),
-      y: clamp(hole.position.y + normalized.y * moveSpeed * deltaSeconds, -limitY, limitY),
-    },
+    x: clamp(hole.position.x + normalized.x * moveSpeed * deltaSeconds, -limitX, limitX),
+    y: clamp(hole.position.y + normalized.y * moveSpeed * deltaSeconds, -limitY, limitY),
   };
+}
+
+function moveHole(hole: HoleState, direction: Vector2, deltaSeconds: number): HoleState {
+  return { ...hole, position: advanceHolePosition(hole, direction, deltaSeconds) };
 }
 
 function updateAbilityState(

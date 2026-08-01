@@ -44,6 +44,7 @@ describe("render frame rate preferences", () => {
       playerRingColor: "#ff5c8a",
       language: "zh-CN",
       renderFrameRate: 45,
+      snapshotFrequency: 30,
     });
   });
 

@@ -4,11 +4,16 @@ import { isLanguage, type Language } from "./i18n";
 export const RENDER_FRAME_RATES = [60, 45] as const;
 export type RenderFrameRate = (typeof RENDER_FRAME_RATES)[number];
 
+/** host 向 guest 广播增量快照的频率（Hz）。仅 host 生效；guest 被动接收任意频率并插值。 */
+export const SNAPSHOT_FREQUENCIES = [30, 40, 50, 60] as const;
+export type SnapshotFrequency = (typeof SNAPSHOT_FREQUENCIES)[number];
+
 export interface GamePreferences {
   playerName: string;
   playerRingColor: string;
   language: Language;
   renderFrameRate: RenderFrameRate;
+  snapshotFrequency: SnapshotFrequency;
 }
 
 const PREFERENCES_KEY = "hole-city-player-preferences";
@@ -19,10 +24,15 @@ export const DEFAULT_PREFERENCES: GamePreferences = {
   playerRingColor: "#2bf0ff",
   language: "zh-CN",
   renderFrameRate: 60,
+  snapshotFrequency: 30,
 };
 
 function isRenderFrameRate(value: unknown): value is RenderFrameRate {
   return RENDER_FRAME_RATES.some((frameRate) => frameRate === value);
+}
+
+function isSnapshotFrequency(value: unknown): value is SnapshotFrequency {
+  return SNAPSHOT_FREQUENCIES.some((frequency) => frequency === value);
 }
 
 export function getDefaultRenderFrameRate(): RenderFrameRate {
@@ -68,6 +78,10 @@ export function loadPreferences(): GamePreferences {
           "renderFrameRate" in parsed && isRenderFrameRate(parsed.renderFrameRate)
             ? parsed.renderFrameRate
             : getDefaultRenderFrameRate(),
+        snapshotFrequency:
+          "snapshotFrequency" in parsed && isSnapshotFrequency(parsed.snapshotFrequency)
+            ? parsed.snapshotFrequency
+            : DEFAULT_PREFERENCES.snapshotFrequency,
       };
     }
   } catch {
